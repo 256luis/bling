@@ -1,11 +1,11 @@
 use crate::error::*;
 
-const RECOGNIZED_NON_ALPHANUM_SYMBOLS: [&str; 24] = [
+const RECOGNIZED_NON_ALPHANUM_SYMBOLS: [&str; 25] = [
     ";", ":", "->", "=", "::", ",", ".",
     "{", "}",
     "(", ")",
     "[", "]",
-    "+", "-", "*", "/",
+    "+", "-", "*", "/", "%",
     "!", "==", "!=", "<=", ">=", "<", ">",
 ];
 
@@ -27,7 +27,6 @@ pub enum LexemeKind {
     Return,
     True,
     False,
-    
     
     LeftParen,
     RightParen,
@@ -55,6 +54,7 @@ pub enum LexemeKind {
     Minus,
     Star,
     Slash,
+    Percent,
 
     StringLiteral(String),
     NumberLiteral(String),
@@ -119,7 +119,8 @@ impl ToString for LexemeKind {
             Self::Minus => "-",
             Self::Star => "*",
             Self::Slash => "/",
-
+            Self::Percent => "%",
+            
             Self::StringLiteral(value) | Self::NumberLiteral(value) | Self::Identifier(value) => {
                 value.as_str()
             }
@@ -181,6 +182,7 @@ impl ToLexeme for String {
             "-"      => Ok(Lexeme{kind: LexemeKind::Minus,         line}),
             "*"      => Ok(Lexeme{kind: LexemeKind::Star,          line}),
             "/"      => Ok(Lexeme{kind: LexemeKind::Slash,         line}),
+            "%"      => Ok(Lexeme{kind: LexemeKind::Percent,       line}),
             
             _ => {
                 // is symbol int?
@@ -399,15 +401,15 @@ impl Lexer for String {
             })            
         }
 
-        lexemes.insert(0, Lexeme {
-            kind: LexemeKind::LeftBrace,
-            line: 0
-        });
+        // lexemes.insert(0, Lexeme {
+        //     kind: LexemeKind::LeftBrace,
+        //     line: 0
+        // });
         
-        lexemes.push(Lexeme {
-            kind: LexemeKind::RightBrace,
-            line: 0
-        });
+        // lexemes.push(Lexeme {
+        //     kind: LexemeKind::RightBrace,
+        //     line: 0
+        // });
         
         Ok(lexemes)
     }
