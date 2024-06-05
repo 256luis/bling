@@ -1,6 +1,6 @@
-use crate::{lexer::*, error::*};
+use crate::{error::*, lexer::*};
 
-struct Parser {
+pub struct Parser {
     lexemes_iter: Box<dyn Iterator<Item = Lexeme>>,
     prev_lexeme: Lexeme,
     current_lexeme: Option<Lexeme>,
@@ -8,7 +8,7 @@ struct Parser {
 }
 
 impl Parser {
-    fn new<'a>(lexemes: &[Lexeme]) -> Parser {
+    pub fn new<'a>(lexemes: &[Lexeme]) -> Parser {
         let mut lexemes_iter = Vec::from(lexemes).into_iter();
         let next_lexeme = lexemes_iter.next();
         
@@ -300,6 +300,8 @@ fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
             LexemeKind::NotEquals     => Ok(BinaryOperation::NotEqualTo),
             LexemeKind::LessEquals    => Ok(BinaryOperation::LessEqualTo),
             LexemeKind::GreaterEquals => Ok(BinaryOperation::GreaterEqualTo),
+            LexemeKind::Less          => Ok(BinaryOperation::LessThan),
+            LexemeKind::Greater       => Ok(BinaryOperation::GreaterThan),
             LexemeKind::Plus          => Ok(BinaryOperation::Add),
             LexemeKind::Minus         => Ok(BinaryOperation::Subtract),
             LexemeKind::Star          => Ok(BinaryOperation::Multiply),
@@ -323,48 +325,54 @@ fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
                 let next_lexeme = parser.next_lexeme.clone().unwrap();
                 if next_lexeme.kind == LexemeKind::Semicolon {
                     parse_term(&parser.current_lexeme.clone().unwrap())
-                } else {                    
-                    if INFIX_LEXEMES.contains(&next_lexeme.kind) {
-                        let left_operand = parse_term(&parser.current_lexeme.clone().unwrap())?;
-
-                        // infix operator
-                        parser.advance();
-                        let operation = get_operation(&parser.current_lexeme.clone().unwrap())?;
-                        
-                        // right operand
-                        parser.advance();
-                        let right_operand = parse_expression(parser)?;
-
-                        Ok(Expression::Binary {
-                            operation,
-                            operand_1: Box::new(left_operand),
-                            operand_2: Box::new(right_operand),
-                        })
-                        
-                        // todo!()
-                    } else {
-                        Err(Error {
-                            message: format!("expected `;` or infix operator, found `{}`", next_lexeme.kind.to_string()),
-                            lines: vec![parser.current_lexeme.clone().unwrap().line, next_lexeme.line]
-                        })
-                    }
+                } else if INFIX_LEXEMES.contains(&next_lexeme.kind) {
+                    let left_operand = parse_term(&parser.current_lexeme.clone().unwrap())?;
+                    
+                    // infix operator
+                    parser.advance();
+                    let operation = get_operation(&parser.current_lexeme.clone().unwrap())?;
+                    
+                    // right operand
+                    parser.advance();
+                    let right_operand = parse_expression(parser)?;
+                    
+                    Ok(Expression::Binary {
+                        operation,
+                        operand_1: Box::new(left_operand),
+                        operand_2: Box::new(right_operand),
+                    })
+                } else {
+                    Err(Error {
+                        message: format!("expected `;` or infix operator, found `{}`", next_lexeme.kind.to_string()),
+                        lines: vec![parser.current_lexeme.clone().unwrap().line, next_lexeme.line]
+                    })
                 }
             }
-            
         },
+            
+        Some(lexeme) => Err(Error {
+            message: format!("expected expression, found `{}`", lexeme.kind.to_string()),
+            lines: vec![lexeme.line]
+        }),
         
-        _ => todo!()
+        None => Err(Error {
+            message: format!("expected expression, found nothing"),
+            lines: vec![parser.prev_lexeme.line]
+        }),
     }
 }
 
 fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
+    println!("parse_const_let");
+
     // constant declaration grammar
     // 'const' IDENTIFIER [ ':' TYPE ] '=' EXPRESSION ';'
     
     // variable declaration grammar
     // 'let' IDENTIFIER ( ':' TYPE ) | ( '=' EXPRESSION ) ';'
 
-    parser.advance();
+    parser.advance(); // skip the first const/let
+    
     let is_const = parser.prev_lexeme.kind == LexemeKind::Const;
     
     // identifier
@@ -408,7 +416,8 @@ fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
     } else {
         None
     };
-
+    parser.advance();
+        
     // either ';' or '='
     let value = match &parser.current_lexeme {        
         Some(Lexeme{kind: LexemeKind::Equals, ..}) => {
@@ -523,25 +532,58 @@ fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
 //     Ok(Statement::Compound(inner_statements))
 // }
 
-pub fn parse(lexemes: &[Lexeme]) -> Result<Statement, Error> {
-    let mut parser = Parser::new(lexemes);
-    parser.advance();
+fn parse_compound(parser: &mut Parser) -> Result<Statement, Error> { 
+    println!("parse_compound");
+
+    // compound statement grammar
+    // '{' { STATEMENT } '}'
+
+    parser.advance(); // skip the first left brace
+    
+    let mut statements: Vec<Statement> = Vec::new();
+
+    loop {
+        match &parser.current_lexeme {
+            Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => return Ok(Statement::Compound(statements)),
+            Some(lexeme) => {
+//                parser.advance();
+                statements.push(parse(parser)?)
+            },
+            None => return Err(Error {
+                message: format!("expected statement, found nothing"),
+                lines: vec![parser.prev_lexeme.line]
+            })
+        }
+        // println!("here");
+        parser.advance()
+    }
+}
+
+pub fn parse(parser: &mut Parser) -> Result<Statement, Error> {
+    // let mut parser = Parser::new(lexemes);
+    // parser.advance();
+    println!("parse");
     
     // let lexeme_kinds: Vec<LexemeKind> = lexemes.iter().map(|x| x.kind.clone()).collect();
     // let mut lexemes_iter = lexemes.iter().cloned();
     match parser.current_lexeme {
-        // Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
-        //     println!("parse compound\n{:#?}\n", lexemes);
-        //     parse_compound(parser)
-        // },
+        Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
+            // parser.advance();
+            parse_compound(parser)
+        },
         
         Some(Lexeme{kind: LexemeKind::Const | LexemeKind::Let, ..}) =>{
-            println!("parse const/let\n{:#?}\n", lexemes);
-            parse_const_let(&mut parser)
+            // parser.advance();
+            parse_const_let(parser)
         },
-            
+
+        None => {
+            parser.advance();
+            parse(parser)
+        }
+        
         _ => {
-            println!("not yet implemented\n{:#?}\n", lexemes);
+            // println!("not yet implemented\n{:#?}\n", lexemes);
             todo!()
         },
     }

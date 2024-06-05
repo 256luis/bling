@@ -93,8 +93,9 @@ fn main() {
     for (i, lexeme) in lexemes.iter().enumerate() {
         println!("{}: {:?}", i, lexeme);
     }
-    
-    let syntax_tree = match parse(lexemes.as_slice()) {
+
+    let mut parser = Parser::new(lexemes.as_slice());
+    let syntax_tree = match parse(&mut parser) {
         Ok(statement) => statement,
         Err(error) => {
             println!("error: {}", error.message);
