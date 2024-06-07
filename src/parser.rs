@@ -12,13 +12,16 @@ impl Parser {
         let mut lexemes_iter = Vec::from(lexemes).into_iter();
         let next_lexeme = lexemes_iter.next();
         
-        Parser {
+        let mut parser = Parser {
             // lexemes_iter: Box::new(Vec::from(lexemes).into_iter()),
             lexemes_iter: Box::new(lexemes_iter.clone()),
             prev_lexeme: Lexeme{kind: LexemeKind::LeftBrace, line: 1},
             current_lexeme: None,
             next_lexeme,
-        }
+        };
+
+        parser.advance();
+        parser
     }
 
     fn advance(&mut self) {
@@ -32,7 +35,30 @@ impl Parser {
         dbg!(&self.current_lexeme);
     }
 
-    
+    fn expect(&self, expected_lexeme_kinds: &[LexemeKind]) -> Result<(), Error> {
+        let mut expected_list_message = format!("`{}`", expected_lexeme_kinds[0].to_string());
+        for lexeme_kind in &expected_lexeme_kinds[1..] {
+            expected_list_message = format!("{expected_list_message} or `{}`", lexeme_kind.to_string());
+        }
+
+        match &self.current_lexeme {
+            Some(lexeme) => {
+                if expected_lexeme_kinds.contains(&lexeme.kind) {
+                    Ok(())
+                } else {
+                    Err(Error {
+                        message: format!("expected {expected_list_message}, found `{}`", lexeme.kind.to_string()),
+                        lines: vec![self.prev_lexeme.line]
+                    })
+                }
+            },
+
+            None => Err(Error {
+                message: format!("expected {expected_list_message}, found nothing"),
+                lines: vec![self.prev_lexeme.line]
+            })
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -95,6 +121,11 @@ pub enum Statement {
         data_type: Option<Type>,
         value: Option<Expression>,
     },
+
+    Assign {
+        identifier: String,
+        value: Expression,
+    }
 }
 
 const INFIX_LEXEMES: [LexemeKind; 10] = [
@@ -362,7 +393,7 @@ fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
     }
 }
 
-fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
+fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
     println!("parse_const_let");
 
     // constant declaration grammar
@@ -375,7 +406,6 @@ fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
     
     let is_const = parser.prev_lexeme.kind == LexemeKind::Const;
     
-    // identifier
     let identifier = match &parser.current_lexeme {
         Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
             identifier.to_owned()
@@ -393,64 +423,61 @@ fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
     };
 
     parser.advance();
+    parser.expect(&[LexemeKind::Colon, LexemeKind::Equals])?;
     
     // check if type is explicit or to be inferred
     let is_type_explicit = match &parser.current_lexeme {
         Some(Lexeme{kind: LexemeKind::Colon, ..}) => true,
         Some(Lexeme{kind: LexemeKind::Equals, ..}) => false,
-        
-        Some(lexeme) => return Err(Error {
-            message: format!("expected `:` or `=`, found `{}`", lexeme.kind.to_string()),
-            lines: vec![lexeme.line]
-        }),
-        
-        None => return Err(Error {
-            message: String::from("expected `:` or `=`, found nothing"),
-            lines: vec![parser.prev_lexeme.line]
-        }),
+        _ => unreachable!()
     };
-
+    
+    // current lexeme should be type (if is_type_explicit == true)
+    // or the start of an expression (if is_type_explicit == false)
+    
     let data_type = if is_type_explicit {
         parser.advance();
-        Some(parse_type(parser)?)
+        let result = Some(parse_type(parser)?);
+
+        // go to semicolon or equals after type
+        parser.advance();
+        result
     } else {
         None
     };
-    parser.advance();
-        
+    
     // either ';' or '='
+    if is_const {
+        parser.expect(&[LexemeKind::Equals])?;
+    } else {
+        parser.expect(&[LexemeKind::Equals, LexemeKind::Semicolon])?;
+    }
+    
     let value = match &parser.current_lexeme {        
         Some(Lexeme{kind: LexemeKind::Equals, ..}) => {
             parser.advance();
-            Some(parse_expression(parser)?)
-        },
+            let result = Some(parse_expression(parser)?);
 
-        Some(Lexeme{kind: LexemeKind::Semicolon, ..}) => if is_const {
-            return Err(Error {
-                message: String::from("constant declaration must have a value known at compile-time"),
-                lines: vec![parser.prev_lexeme.line]               
-            });
-        } else {
-            None
-        },
-
-        Some(lexeme) => {
-            let expected_symbol = if is_const { "`=`" } else { "`;` or '='" };
-            return Err(Error {
-                message: format!("expected {}, found `{}`", expected_symbol, lexeme.kind.to_string()),
-                lines: vec![parser.prev_lexeme.line]               
-            })
+            // go to semicolon after expression
+            parser.advance();
+            result
         },
         
-        None => {
-            let expected_symbol = if is_const { "`=`" } else { "`;` or '='" };
-            return Err(Error {
-                message: format!("expected {}, found nothing", expected_symbol),
-                lines: vec![parser.prev_lexeme.line]               
-            })
-        }, 
+        Some(Lexeme{kind: LexemeKind::Semicolon, ..}) => {
+            // parser.advance();
+            None
+        },
+        
+        _ => unreachable!()
+    
     };
+    println!("here!");
 
+    dbg!(&parser.current_lexeme);
+    // panic!();
+    
+    println!("exiting const let");
+    
     if is_const {
         Ok(Statement::DeclareConstant {
             identifier,
@@ -466,97 +493,49 @@ fn parse_const_let(parser: &mut Parser) -> Result<Statement, Error> {
     }    
 }
 
-// fn parse_compound(parser: Parser) -> Result<Statement, Error> {
-//     lexemes_iter.next(); // skip the first left brace
-//     let mut current_lexeme = lexemes_iter.next();
-
-//     let inner_lexemes = {
-//         let mut inner_lexemes: Vec<Lexeme> = Vec::new();
-//         let mut brace_counter = 1;
-//         loop {
-//             // dbg!(&current_lexeme);
-            
-//             match &current_lexeme {
-//                 Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => brace_counter += 1,
-//                 Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => brace_counter -= 1,
-//                 Some(_) => {},
-//                 None => unreachable!(),
-//             }
-
-//             if brace_counter == 0 {
-//                 break;
-//             }
-
-//             inner_lexemes.push(current_lexeme.clone().unwrap());
-
-//             current_lexeme = lexemes_iter.next();
-//         }
-
-//         inner_lexemes
-//     };
-    
-//     // separate inner lexemes by semicolon (respecting the brackets)
-//     let separated_lexemes = {
-//         let mut brace_counter = 0;
-//         let mut separated_lexemes: Vec<Vec<Lexeme>> = Vec::new();
-//         let mut buffer: Vec<Lexeme> = Vec::new();
-//         for lexeme in inner_lexemes {
-//             if lexeme.kind == LexemeKind::LeftBrace {
-//                 brace_counter += 1;
-//             } else if lexeme.kind == LexemeKind::RightBrace {
-//                 brace_counter -= 1;
-//             }
-            
-//             buffer.push(lexeme.clone());
-
-//             if lexeme.kind == LexemeKind::Semicolon && brace_counter == 0 {
-//                 separated_lexemes.push(buffer.clone());
-//                 buffer.clear();
-//             }
-//         }
-        
-//         // for the last expression that doesnt have semicolon
-//         if !buffer.is_empty() {
-//             separated_lexemes.push(buffer.clone());
-//             buffer.clear();
-//         }                    
-
-//         separated_lexemes
-//     };
-
-//     let mut inner_statements: Vec<Statement> = Vec::new();
-//     for statement_lexemes in separated_lexemes {
-//         inner_statements.push(parse(&statement_lexemes)?);
-//     }
-
-//     Ok(Statement::Compound(inner_statements))
-// }
-
 fn parse_compound(parser: &mut Parser) -> Result<Statement, Error> { 
-    println!("parse_compound");
-
-    // compound statement grammar
-    // '{' { STATEMENT } '}'
-
-    parser.advance(); // skip the first left brace
-    
     let mut statements: Vec<Statement> = Vec::new();
 
+    // skip the first left brace
+    parser.advance();
+    
     loop {
         match &parser.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => return Ok(Statement::Compound(statements)),
-            Some(lexeme) => {
-//                parser.advance();
-                statements.push(parse(parser)?)
-            },
-            None => return Err(Error {
-                message: format!("expected statement, found nothing"),
-                lines: vec![parser.prev_lexeme.line]
-            })
+            Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => {
+                break;
+            }
+            Some(_) => statements.push(parse(parser)?),
+            None => unreachable!(),
         }
-        // println!("here");
-        parser.advance()
+
+        parser.advance();
     }
+
+    Ok(Statement::Compound(statements))
+}
+
+pub fn parse_assign(parser: &mut Parser) -> Result<Statement, Error> {
+    // assignment grammar
+    // IDENTIFIER '=' EXPRESSION ';'
+    let identifier = match &parser.current_lexeme {
+        Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+        _ => unreachable!()
+    };
+    
+    parser.advance();
+    parser.expect(&[LexemeKind::Equals])?;
+
+    // go to  start of expression;
+    parser.advance();
+    let value = parse_expression(parser)?;
+
+    // go to semicolon after expression
+    parser.advance();
+        
+    Ok(Statement::Assign {
+        identifier,
+        value
+    })
 }
 
 pub fn parse(parser: &mut Parser) -> Result<Statement, Error> {
@@ -568,19 +547,16 @@ pub fn parse(parser: &mut Parser) -> Result<Statement, Error> {
     // let mut lexemes_iter = lexemes.iter().cloned();
     match parser.current_lexeme {
         Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
-            // parser.advance();
             parse_compound(parser)
         },
         
-        Some(Lexeme{kind: LexemeKind::Const | LexemeKind::Let, ..}) =>{
-            // parser.advance();
-            parse_const_let(parser)
+        Some(Lexeme{kind: LexemeKind::Const | LexemeKind::Let, ..}) => {
+            parse_declare(parser)
         },
 
-        None => {
-            parser.advance();
-            parse(parser)
-        }
+        Some(Lexeme{kind: LexemeKind::Identifier(_), ..}) => {
+            parse_assign(parser)
+        },
         
         _ => {
             // println!("not yet implemented\n{:#?}\n", lexemes);

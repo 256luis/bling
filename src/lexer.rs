@@ -401,15 +401,15 @@ impl Lexer for String {
             })            
         }
 
-        // lexemes.insert(0, Lexeme {
-        //     kind: LexemeKind::LeftBrace,
-        //     line: 0
-        // });
+        lexemes.insert(0, Lexeme {
+            kind: LexemeKind::LeftBrace,
+            line: 0
+        });
         
-        // lexemes.push(Lexeme {
-        //     kind: LexemeKind::RightBrace,
-        //     line: 0
-        // });
+        lexemes.push(Lexeme {
+            kind: LexemeKind::RightBrace,
+            line: 0
+        });
         
         Ok(lexemes)
     }
