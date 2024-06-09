@@ -8,7 +8,7 @@ pub struct Parser {
 }
 
 impl Parser {
-    pub fn new<'a>(lexemes: &[Lexeme]) -> Parser {
+    pub fn new(lexemes: &[Lexeme]) -> Parser {
         let mut lexemes_iter = Vec::from(lexemes).into_iter();
         let next_lexeme = lexemes_iter.next();
         
@@ -36,28 +36,73 @@ impl Parser {
     }
 
     fn expect(&self, expected_lexeme_kinds: &[LexemeKind]) -> Result<(), Error> {
-        let mut expected_list_message = format!("`{}`", expected_lexeme_kinds[0].to_string());
-        for lexeme_kind in &expected_lexeme_kinds[1..] {
-            expected_list_message = format!("{expected_list_message} or `{}`", lexeme_kind.to_string());
+        let mut expected_lexemes_strings: Vec<String> = Vec::new();
+        for lexeme_kind in expected_lexeme_kinds {
+            match lexeme_kind {
+                LexemeKind::Identifier(_) => expected_lexemes_strings.push(String::from("identifier")),
+                LexemeKind::StringLiteral(_) => expected_lexemes_strings.push(String::from("string literal")),
+                LexemeKind::NumberLiteral(_) => expected_lexemes_strings.push(String::from("number literal")),
+                _ => expected_lexemes_strings.push(format!{"`{}`", lexeme_kind.to_string()})
+            }
         }
 
+        let expected_lexemes_list_message = expected_lexemes_strings.join(" or ");
+        
         match &self.current_lexeme {
-            Some(lexeme) => {
-                if expected_lexeme_kinds.contains(&lexeme.kind) {
-                    Ok(())
-                } else {
-                    Err(Error {
-                        message: format!("expected {expected_list_message}, found `{}`", lexeme.kind.to_string()),
-                        lines: vec![self.prev_lexeme.line]
-                    })
-                }
-            },
-
-            None => Err(Error {
-                message: format!("expected {expected_list_message}, found nothing"),
+            None | Some(Lexeme{kind: LexemeKind::RightBrace, line: 0}) => Err(Error {
+                message: format!("expected {}, found nothing", expected_lexemes_list_message),
                 lines: vec![self.prev_lexeme.line]
-            })
+            }),
+            
+            Some(lexeme) => {
+                match lexeme.kind {
+                    LexemeKind::Identifier(_) => if expected_lexeme_kinds.contains(&LexemeKind::Identifier(String::new())) {
+                        return Ok(());
+                    },
+
+                    LexemeKind::StringLiteral(_) => if expected_lexeme_kinds.contains(&LexemeKind::StringLiteral(String::new())) {
+                        return Ok(());
+                    },
+                    
+                    LexemeKind::NumberLiteral(_) => if expected_lexeme_kinds.contains(&LexemeKind::NumberLiteral(String::new())) {
+                        return Ok(());
+                    },
+
+                    _ => if expected_lexeme_kinds.contains(&lexeme.kind) {
+                        return Ok(());
+                    }
+                }
+
+                Err(Error {
+                    message: format!("expected {}, found `{}`",
+                        expected_lexemes_list_message, lexeme.kind.to_string()),
+                    lines: vec![lexeme.line]
+                })
+            }
         }
+        
+        // let mut expected_list_message = format!("`{}`", expected_lexeme_kinds[0].to_string());
+        // for lexeme_kind in &expected_lexeme_kinds[1..] {
+        //     expected_list_message = format!("{expected_list_message} or `{}`", lexeme_kind.to_string());
+        // }
+
+        // match &self.current_lexeme {
+        //     None | Some(Lexeme{kind: LexemeKind::RightBrace, line: 0}) => Err(Error {
+        //         message: format!("expected {expected_list_message}, found nothing"),
+        //         lines: vec![self.prev_lexeme.line]
+        //     }),
+
+        //     Some(lexeme) => {
+        //         if expected_lexeme_kinds.contains(&lexeme.kind) {
+        //             Ok(())
+        //         } else {
+        //             Err(Error {
+        //                 message: format!("expected {expected_list_message}, found `{}`", lexeme.kind.to_string()),
+        //                 lines: vec![self.prev_lexeme.line]
+        //             })
+        //         }
+        //     },
+        // }
     }
 }
 
@@ -87,6 +132,28 @@ pub enum BinaryOperation {
     EqualTo, NotEqualTo, LessEqualTo, GreaterEqualTo, LessThan, GreaterThan,
 }
 
+impl BinaryOperation {
+    fn from_lexeme(lexeme: &Lexeme) -> Result<Self, Error> {
+        match lexeme.kind {
+            LexemeKind::DoubleEquals  => Ok(BinaryOperation::EqualTo),
+            LexemeKind::NotEquals     => Ok(BinaryOperation::NotEqualTo),
+            LexemeKind::LessEquals    => Ok(BinaryOperation::LessEqualTo),
+            LexemeKind::GreaterEquals => Ok(BinaryOperation::GreaterEqualTo),
+            LexemeKind::Less          => Ok(BinaryOperation::LessThan),
+            LexemeKind::Greater       => Ok(BinaryOperation::GreaterThan),
+            LexemeKind::Plus          => Ok(BinaryOperation::Add),
+            LexemeKind::Minus         => Ok(BinaryOperation::Subtract),
+            LexemeKind::Star          => Ok(BinaryOperation::Multiply),
+            LexemeKind::Slash         => Ok(BinaryOperation::Divide),
+            LexemeKind::Percent       => Ok(BinaryOperation::Modulo),
+            _ => Err(Error {
+                message: format!("expected binary operator, found `{}`", lexeme.kind.to_string()),
+                lines: vec![lexeme.line]
+            })   
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Expression {
     Identifier(String),
@@ -109,7 +176,7 @@ pub enum Expression {
 #[derive(Debug)]
 pub enum Statement {
     Compound(Vec<Statement>),
-
+    
     DeclareConstant {
         identifier: String,
         data_type: Option<Type>,
@@ -137,6 +204,12 @@ const INFIX_LEXEMES: [LexemeKind; 10] = [
 
 fn parse_type(parser: &mut Parser) -> Result<Type, Error> {
     //println!("parse type\n{:#?}\n", lexemes_iter);
+    parser.expect(&[
+        LexemeKind::Identifier(String::new()),
+        LexemeKind::Proc,
+        LexemeKind::Func,
+    ])?;
+
     match &parser.current_lexeme {
         Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
             match identifier.as_str() {
@@ -147,19 +220,27 @@ fn parse_type(parser: &mut Parser) -> Result<Type, Error> {
             }            
         },
 
-        Some(Lexeme{kind: LexemeKind::Proc | LexemeKind::Func, ..}) => {
-            todo!()
-        },
-        
-        Some(lexeme) => Err(Error {
-            message: format!("expected type, found `{}`", lexeme.kind.to_string()),
-            lines: vec![lexeme.line]
-        }),
+        Some(lexeme @ Lexeme{kind: LexemeKind::Proc | LexemeKind::Func, ..}) => {
+            let is_func = lexeme.kind == LexemeKind::Func;
 
-        None => Err(Error {
-            message: String::from("expected type, found nothing"),
-            lines: vec![1]
-        })
+            // // func type grammar
+            // // 'func' '(' [ TYPE { ',' TYPE } ] ')' '->' TYPE
+            
+            // // proc type grammar
+            // // 'proc' '(' [ TYPE { ',' TYPE } ] ')' 
+
+            // parser.advance();
+            // parser.expect(&[LexemeKind::LeftParen])?;
+
+            // parser.advance();
+            // let param_types = {
+                
+            // };
+            
+            todo!();
+        },
+
+        _ => unreachable!()
     }
     
     // panic!();
@@ -304,8 +385,7 @@ fn parse_type(parser: &mut Parser) -> Result<Type, Error> {
 }
 
 fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
-    // println!("parse expression\n{:#?}\n", lexemes);
-
+    
     fn parse_term(lexeme: &Lexeme) -> Result<Expression, Error> {
         match &lexeme.kind {
             LexemeKind::Identifier(identifier) => Ok(Expression::Identifier(identifier.to_owned())),
@@ -325,72 +405,68 @@ fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
         }
     }
 
-    fn get_operation(lexeme: &Lexeme) -> Result<BinaryOperation, Error> {
+    // checks if a lexeme is a valid lexeme in an expression
+    fn is_expression_lexeme(lexeme: &Lexeme) -> bool {
         match lexeme.kind {
-            LexemeKind::DoubleEquals  => Ok(BinaryOperation::EqualTo),
-            LexemeKind::NotEquals     => Ok(BinaryOperation::NotEqualTo),
-            LexemeKind::LessEquals    => Ok(BinaryOperation::LessEqualTo),
-            LexemeKind::GreaterEquals => Ok(BinaryOperation::GreaterEqualTo),
-            LexemeKind::Less          => Ok(BinaryOperation::LessThan),
-            LexemeKind::Greater       => Ok(BinaryOperation::GreaterThan),
-            LexemeKind::Plus          => Ok(BinaryOperation::Add),
-            LexemeKind::Minus         => Ok(BinaryOperation::Subtract),
-            LexemeKind::Star          => Ok(BinaryOperation::Multiply),
-            LexemeKind::Slash         => Ok(BinaryOperation::Divide),
-            LexemeKind::Percent       => Ok(BinaryOperation::Modulo),
-            _ => Err(Error {
-                message: format!("expected binary operator, found `{}`", lexeme.kind.to_string()),
-                lines: vec![lexeme.line]
-            })            
+            LexemeKind::Identifier(_) |
+            LexemeKind::StringLiteral(_) |
+            LexemeKind::NumberLiteral(_) |
+            LexemeKind::DoubleEquals |
+            LexemeKind::NotEquals |
+            LexemeKind::LessEquals |
+            LexemeKind::GreaterEquals |
+            LexemeKind::Less |
+            LexemeKind::Greater |
+            LexemeKind::Plus | 
+            LexemeKind::Minus | 
+            LexemeKind::Star | 
+            LexemeKind::Slash | 
+            LexemeKind::Percent => true,
+            _ => false
         }
     }
+
+    parser.expect(&[
+        LexemeKind::Identifier(String::new()),
+        LexemeKind::NumberLiteral(String::new()),
+        LexemeKind::StringLiteral(String::new()),
+        LexemeKind::LeftParen,
+    ])?;
+
     
-    match &parser.current_lexeme {
-        Some(Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::StringLiteral(_) | LexemeKind::NumberLiteral(_), ..}) => {
-            if parser.next_lexeme.is_none() {
-                Err(Error {
-                    message: String::from("expected `;` or an infix operator, found nothing"),
-                    lines: vec![parser.current_lexeme.clone().unwrap().line]
-                })
-            } else {
-                let next_lexeme = parser.next_lexeme.clone().unwrap();
-                if next_lexeme.kind == LexemeKind::Semicolon {
-                    parse_term(&parser.current_lexeme.clone().unwrap())
-                } else if INFIX_LEXEMES.contains(&next_lexeme.kind) {
-                    let left_operand = parse_term(&parser.current_lexeme.clone().unwrap())?;
-                    
-                    // infix operator
-                    parser.advance();
-                    let operation = get_operation(&parser.current_lexeme.clone().unwrap())?;
-                    
-                    // right operand
-                    parser.advance();
-                    let right_operand = parse_expression(parser)?;
-                    
-                    Ok(Expression::Binary {
-                        operation,
-                        operand_1: Box::new(left_operand),
-                        operand_2: Box::new(right_operand),
-                    })
-                } else {
-                    Err(Error {
-                        message: format!("expected `;` or infix operator, found `{}`", next_lexeme.kind.to_string()),
-                        lines: vec![parser.current_lexeme.clone().unwrap().line, next_lexeme.line]
-                    })
-                }
-            }
+    
+    let operand_1 = match &parser.current_lexeme {
+        Some(lexeme @ Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::StringLiteral(_) | LexemeKind::NumberLiteral(_), ..}) => {
+            parse_term(lexeme)?
         },
-            
-        Some(lexeme) => Err(Error {
-            message: format!("expected expression, found `{}`", lexeme.kind.to_string()),
-            lines: vec![lexeme.line]
-        }),
+
+        Some(Lexeme{kind: LexemeKind::LeftParen, .. }) => {
+            parser.advance();
+            let expression = parse_expression(parser)?;
+
+            parser.advance();
+            parser.expect(&[LexemeKind::RightParen])?;
+      
+            expression
+        }
+
+        _ => unreachable!()
+    };
+
+    if let Ok(operation) = BinaryOperation::from_lexeme(parser.next_lexeme.as_ref().unwrap()) {
+        parser.advance(); // skip opereation
+
+        parser.advance();
+        let operand_2 = parse_expression(parser)?;
         
-        None => Err(Error {
-            message: format!("expected expression, found nothing"),
-            lines: vec![parser.prev_lexeme.line]
-        }),
-    }
+        Ok(Expression::Binary {
+            operation,
+            operand_1: Box::new(operand_1),
+            operand_2: Box::new(operand_2),
+        })
+    } else {
+        Ok(operand_1)
+    }    
 }
 
 fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
@@ -402,25 +478,31 @@ fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
     // variable declaration grammar
     // 'let' IDENTIFIER ( ':' TYPE ) | ( '=' EXPRESSION ) ';'
 
-    parser.advance(); // skip the first const/let
+    let is_const = parser.current_lexeme.as_ref().unwrap().kind == LexemeKind::Const;
     
-    let is_const = parser.prev_lexeme.kind == LexemeKind::Const;
-    
-    let identifier = match &parser.current_lexeme {
-        Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
-            identifier.to_owned()
-        },
+    parser.advance();
+    parser.expect(&[LexemeKind::Identifier(String::new())])?;
 
-        Some(lexeme) => return Err(Error {
-            message: format!("expected identifier, found `{}`", lexeme.kind.to_string()),
-            lines: vec![lexeme.line]
-        }),
-        
-        None => return Err(Error {
-            message: String::from("expected identifier, found nothing"),
-            lines: vec![parser.prev_lexeme.line]
-        }),
+    let identifier = match &parser.current_lexeme {
+        Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+        _ => unreachable!()
     };
+    
+    // let identifier = match &parser.current_lexeme {
+    //     Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
+    //         identifier.to_owned()
+    //     },
+
+    //     Some(lexeme) => return Err(Error {
+    //         message: format!("expected identifier, found `{}`", lexeme.kind.to_string()),
+    //         lines: vec![lexeme.line]
+    //     }),
+        
+    //     None => return Err(Error {
+    //         message: String::from("expected identifier, found nothing"),
+    //         lines: vec![parser.prev_lexeme.line]
+    //     }),
+    // };
 
     parser.advance();
     parser.expect(&[LexemeKind::Colon, LexemeKind::Equals])?;
@@ -460,6 +542,8 @@ fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
 
             // go to semicolon after expression
             parser.advance();
+            parser.expect(&[LexemeKind::Semicolon])?;
+            
             result
         },
         
@@ -471,12 +555,6 @@ fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
         _ => unreachable!()
     
     };
-    println!("here!");
-
-    dbg!(&parser.current_lexeme);
-    // panic!();
-    
-    println!("exiting const let");
     
     if is_const {
         Ok(Statement::DeclareConstant {
@@ -496,10 +574,8 @@ fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
 fn parse_compound(parser: &mut Parser) -> Result<Statement, Error> { 
     let mut statements: Vec<Statement> = Vec::new();
 
-    // skip the first left brace
-    parser.advance();
-    
     loop {
+        parser.advance();
         match &parser.current_lexeme {
             Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => {
                 break;
@@ -507,8 +583,6 @@ fn parse_compound(parser: &mut Parser) -> Result<Statement, Error> {
             Some(_) => statements.push(parse(parser)?),
             None => unreachable!(),
         }
-
-        parser.advance();
     }
 
     Ok(Statement::Compound(statements))
