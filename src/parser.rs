@@ -35,9 +35,9 @@ impl Parser {
         dbg!(&self.current_lexeme);
     }
 
-    fn expect(&self, expected_lexeme_kinds: &[LexemeKind]) -> Result<(), Error> {
+    fn expect(&self, lexeme_kinds: &[LexemeKind]) -> Result<(), Error> {
         let mut expected_lexemes_strings: Vec<String> = Vec::new();
-        for lexeme_kind in expected_lexeme_kinds {
+        for lexeme_kind in lexeme_kinds {
             match lexeme_kind {
                 LexemeKind::Identifier(_) => expected_lexemes_strings.push(String::from("identifier")),
                 LexemeKind::StringLiteral(_) => expected_lexemes_strings.push(String::from("string literal")),
@@ -56,19 +56,19 @@ impl Parser {
             
             Some(lexeme) => {
                 match lexeme.kind {
-                    LexemeKind::Identifier(_) => if expected_lexeme_kinds.contains(&LexemeKind::Identifier(String::new())) {
+                    LexemeKind::Identifier(_) => if lexeme_kinds.contains(&LexemeKind::Identifier(String::new())) {
                         return Ok(());
                     },
 
-                    LexemeKind::StringLiteral(_) => if expected_lexeme_kinds.contains(&LexemeKind::StringLiteral(String::new())) {
+                    LexemeKind::StringLiteral(_) => if lexeme_kinds.contains(&LexemeKind::StringLiteral(String::new())) {
                         return Ok(());
                     },
                     
-                    LexemeKind::NumberLiteral(_) => if expected_lexeme_kinds.contains(&LexemeKind::NumberLiteral(String::new())) {
+                    LexemeKind::NumberLiteral(_) => if lexeme_kinds.contains(&LexemeKind::NumberLiteral(String::new())) {
                         return Ok(());
                     },
 
-                    _ => if expected_lexeme_kinds.contains(&lexeme.kind) {
+                    _ => if lexeme_kinds.contains(&lexeme.kind) {
                         return Ok(());
                     }
                 }
@@ -80,29 +80,6 @@ impl Parser {
                 })
             }
         }
-        
-        // let mut expected_list_message = format!("`{}`", expected_lexeme_kinds[0].to_string());
-        // for lexeme_kind in &expected_lexeme_kinds[1..] {
-        //     expected_list_message = format!("{expected_list_message} or `{}`", lexeme_kind.to_string());
-        // }
-
-        // match &self.current_lexeme {
-        //     None | Some(Lexeme{kind: LexemeKind::RightBrace, line: 0}) => Err(Error {
-        //         message: format!("expected {expected_list_message}, found nothing"),
-        //         lines: vec![self.prev_lexeme.line]
-        //     }),
-
-        //     Some(lexeme) => {
-        //         if expected_lexeme_kinds.contains(&lexeme.kind) {
-        //             Ok(())
-        //         } else {
-        //             Err(Error {
-        //                 message: format!("expected {expected_list_message}, found `{}`", lexeme.kind.to_string()),
-        //                 lines: vec![self.prev_lexeme.line]
-        //             })
-        //         }
-        //     },
-        // }
     }
 }
 
@@ -110,11 +87,11 @@ impl Parser {
 pub enum Type {
     Int, Float, String, UserDefined(String),
 
-    Proc {
+    Procedure {
         param_types: Vec<Type>
     },
 
-    Func {
+    Function {
         param_types: Vec<Type>,
         return_type: Box<Type>,
     },
@@ -221,7 +198,7 @@ fn parse_type(parser: &mut Parser) -> Result<Type, Error> {
         },
 
         Some(lexeme @ Lexeme{kind: LexemeKind::Proc | LexemeKind::Func, ..}) => {
-            let is_func = lexeme.kind == LexemeKind::Func;
+            let is_proc = lexeme.kind == LexemeKind::Proc;
 
             // // func type grammar
             // // 'func' '(' [ TYPE { ',' TYPE } ] ')' '->' TYPE
@@ -229,159 +206,68 @@ fn parse_type(parser: &mut Parser) -> Result<Type, Error> {
             // // proc type grammar
             // // 'proc' '(' [ TYPE { ',' TYPE } ] ')' 
 
-            // parser.advance();
-            // parser.expect(&[LexemeKind::LeftParen])?;
+            parser.advance();
+            parser.expect(&[LexemeKind::LeftParen])?;
 
-            // parser.advance();
-            // let param_types = {
-                
-            // };
+            // parse the first type (if there are any)
+            let mut param_types: Vec<Type> = Vec::new();            
             
-            todo!();
+            parser.advance();
+            parser.expect(&[
+                LexemeKind::Identifier(String::new()),
+                LexemeKind::Proc,
+                LexemeKind::Func,
+                LexemeKind::RightParen
+            ])?;
+
+            match &parser.current_lexeme {
+                Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
+                Some(_) => {
+                    param_types.push(parse_type(parser)?);
+
+                    // parse the rest
+                    loop {
+                        parser.advance();
+                        parser.expect(&[
+                            LexemeKind::RightParen,
+                            LexemeKind::Comma
+                        ])?;
+
+                        match &parser.current_lexeme {
+                            Some(Lexeme{kind: LexemeKind::RightParen, ..}) => break,
+                            Some(Lexeme{kind: LexemeKind::Comma, ..}) => {
+                                parser.advance();
+                                param_types.push(parse_type(parser)?);
+                            },
+
+                            _ => unreachable!()
+                        }
+                    }
+                },
+
+                _ => unreachable!()
+            }
+
+            if is_proc {
+                return Ok(Type::Procedure {
+                    param_types
+                });
+            }
+
+            parser.advance();
+            parser.expect(&[LexemeKind::Arrow])?;
+
+            parser.advance();
+            let return_type = Box::new(parse_type(parser)?);
+
+            Ok(Type::Function {
+                param_types,
+                return_type
+            })
         },
 
         _ => unreachable!()
     }
-    
-    // panic!();
-    // match lexeme_kinds.as_slice() {
-    //     [LexemeKind::Identifier(type_name)] => {
-    //         match type_name.as_str() {
-    //             "int" => Ok(Type::Int),
-    //             "float" => Ok(Type::Float),
-    //             "string" => Ok(Type::String),
-    //             _ => Ok(Type::UserDefined(type_name.to_string())),
-    //         }
-    //     },
-        
-    //     [LexemeKind::Proc | LexemeKind::Func, ..] => {
-    //         let is_func = lexemes[0].kind == LexemeKind::Func;
-            
-    //         // func type grammar
-    //         // 'func' '(' [ TYPE { ',' TYPE } ] ')' '->' TYPE
-
-    //         // proc type grammar
-    //         // 'proc' '(' [ TYPE { ',' TYPE } ] ')' 
-
-    //         let mut lexemes_iter = lexemes.iter();            
-    //         let mut prev_lexeme = lexemes_iter.next().unwrap();
-    //         let mut current_lexeme = lexemes_iter.next();
-
-    //         // '(' --------------------
-    //         match current_lexeme {
-    //             Some(Lexeme{kind: LexemeKind::LeftParen, ..}) => {},
-                
-    //             Some(lexeme) => return Err(Error {
-    //                 message: format!("expected `(`, found `{}`", lexeme.kind.to_string()),
-    //                 lines: vec![lexeme.line]
-    //             }),
-                
-    //             None => return Err(Error {
-    //                 message: String::from("expected `(`, found nothing"),
-    //                 lines: vec![prev_lexeme.line]
-    //             }),
-    //         }
-
-    //         // TYPE_LIST ----------------
-    //         prev_lexeme = current_lexeme.unwrap();
-    //         current_lexeme = lexemes_iter.next();
-
-    //         // get all lexemes between the parens and separate them by comma while still
-    //         // respecting parens
-    //         let mut paren_counter = 1; // 1 because we skipped the first left paren
-    //         let mut type_list_lexemes: Vec<Vec<Lexeme>> = Vec::new();
-    //         let mut buffer: Vec<Lexeme> = Vec::new();
-    //         loop {
-    //             // i think current_lexeme will never be none because the lexer ensures that
-    //             // parens are always correct
-    //             // todo: remove?
-    //             // dbg!(&current_lexeme);
-    //             if current_lexeme.is_none() {
-    //                 return Err(Error {
-    //                     message: String::from("procedure type must take the form `proc(type, ...)`"),
-    //                     lines: vec![prev_lexeme.line],
-    //                 })                    
-    //             }
-
-    //             let lexeme = current_lexeme.unwrap();
-    //             prev_lexeme = current_lexeme.unwrap();
-    //             current_lexeme = lexemes_iter.next();
-                
-    //             if lexeme.kind == LexemeKind::LeftParen {
-    //                 paren_counter += 1;
-    //             } else if lexeme.kind == LexemeKind::RightParen {
-    //                 paren_counter -= 1;
-    //                 if paren_counter == 0 {
-    //                     break;
-    //                 }
-    //             }
-
-    //             if lexeme.kind == LexemeKind::Comma && paren_counter == 1 {
-    //                 type_list_lexemes.push(buffer.clone());
-    //                 buffer.clear();
-    //                 continue;
-    //             }
-
-    //             buffer.push(lexeme.clone());
-    //         }
-
-    //         // for the last type that isnt followed by a comma
-    //         if !buffer.is_empty() {
-    //             type_list_lexemes.push(buffer.clone());
-    //             buffer.clear();
-    //         }                    
-
-    //         // parse each type in the type list
-    //         let param_types =  {
-    //             let mut result: Vec<Type> = Vec::new();
-    //             for type_lexemes in type_list_lexemes {
-    //                 let param_type = parse_type(&type_lexemes)?;
-    //                 result.push(param_type);
-    //             }
-
-    //             result
-    //         };
-
-    //         // dbg!(&param_types);
-
-    //         if is_func {
-    //             // -> -------------------
-    //             match current_lexeme {
-    //                 Some(Lexeme{kind: LexemeKind::Arrow, ..}) => {},
-    //                 Some(lexeme) => return Err(Error {
-    //                     message: format!("expected `->`, found `{}`", lexeme.kind.to_string()),
-    //                     lines: vec![lexeme.line]
-    //                 }),
-    //                 None => return Err(Error {
-    //                     message: String::from("expected `->`, found nothing"),
-    //                     lines: vec![prev_lexeme.line]
-    //                 })
-    //             }
-
-    //             // return type -----------------                
-    //             let return_type = {
-    //                 let remaining: Vec<_> = lexemes_iter.cloned().collect();
-    //                 Box::new(parse_type(remaining.as_slice())?)
-    //             };
-
-    //             Ok(Type::Func {
-    //                 param_types,
-    //                 return_type
-    //             })
-    //         } else { 
-    //             Ok(Type::Proc {
-    //                 param_types
-    //             })                    
-    //         }
-    //     },
-
-    //     _ => Err(Error {
-    //         message: format!("expected type_name, found `{}`", lexemes[0].kind.to_string()),
-    //         lines: lexemes.iter().map(|x| x.line).collect()
-    //     })
-    // }
-    
-    // todo!()
 }
 
 fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
@@ -405,35 +291,12 @@ fn parse_expression(parser: &mut Parser) -> Result<Expression, Error> {
         }
     }
 
-    // checks if a lexeme is a valid lexeme in an expression
-    fn is_expression_lexeme(lexeme: &Lexeme) -> bool {
-        match lexeme.kind {
-            LexemeKind::Identifier(_) |
-            LexemeKind::StringLiteral(_) |
-            LexemeKind::NumberLiteral(_) |
-            LexemeKind::DoubleEquals |
-            LexemeKind::NotEquals |
-            LexemeKind::LessEquals |
-            LexemeKind::GreaterEquals |
-            LexemeKind::Less |
-            LexemeKind::Greater |
-            LexemeKind::Plus | 
-            LexemeKind::Minus | 
-            LexemeKind::Star | 
-            LexemeKind::Slash | 
-            LexemeKind::Percent => true,
-            _ => false
-        }
-    }
-
     parser.expect(&[
         LexemeKind::Identifier(String::new()),
         LexemeKind::NumberLiteral(String::new()),
         LexemeKind::StringLiteral(String::new()),
         LexemeKind::LeftParen,
     ])?;
-
-    
     
     let operand_1 = match &parser.current_lexeme {
         Some(lexeme @ Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::StringLiteral(_) | LexemeKind::NumberLiteral(_), ..}) => {
@@ -488,22 +351,6 @@ fn parse_declare(parser: &mut Parser) -> Result<Statement, Error> {
         _ => unreachable!()
     };
     
-    // let identifier = match &parser.current_lexeme {
-    //     Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
-    //         identifier.to_owned()
-    //     },
-
-    //     Some(lexeme) => return Err(Error {
-    //         message: format!("expected identifier, found `{}`", lexeme.kind.to_string()),
-    //         lines: vec![lexeme.line]
-    //     }),
-        
-    //     None => return Err(Error {
-    //         message: String::from("expected identifier, found nothing"),
-    //         lines: vec![parser.prev_lexeme.line]
-    //     }),
-    // };
-
     parser.advance();
     parser.expect(&[LexemeKind::Colon, LexemeKind::Equals])?;
     
@@ -605,7 +452,8 @@ pub fn parse_assign(parser: &mut Parser) -> Result<Statement, Error> {
 
     // go to semicolon after expression
     parser.advance();
-        
+    parser.expect(&[LexemeKind::Semicolon])?;
+    
     Ok(Statement::Assign {
         identifier,
         value

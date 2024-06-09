@@ -105,7 +105,7 @@ impl ToString for LexemeKind {
             Self::DoubleColon => "::",
             Self::Period => ".",
             Self::Comma => ",",
-            Self::Arrow => "=>",
+            Self::Arrow => "->",
             
             Self::Equals => "=",
             Self::Bang => "!",
