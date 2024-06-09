@@ -62,7 +62,13 @@ pub enum Expression {
     },
 
     ProcedureDefinition {
-        param_list: Vec<IdentifierAndType>,
+        args: Vec<IdentifierAndType>,
+        body: Box<Statement>
+    },
+
+    FunctionDefinition {
+        args: Vec<IdentifierAndType>,
+        return_type: Type,
         body: Box<Statement>
     }
 }
@@ -172,12 +178,13 @@ impl Parser {
     }
     
     pub fn parse_statement(&mut self) -> Result<Statement, Error> {
-        // let mut parser = Parser::new(lexemes);
-        // parser.advance();
-        println!("parse");
-    
-        // let lexeme_kinds: Vec<LexemeKind> = lexemes.iter().map(|x| x.kind.clone()).collect();
-        // let mut lexemes_iter = lexemes.iter().cloned();
+        self.expect(&[
+            LexemeKind::LeftBrace,
+            LexemeKind::Const,
+            LexemeKind::Let,
+            LexemeKind::Identifier(String::new())
+        ])?;
+        
         match self.current_lexeme {
             Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
                 self.parse_compound()
@@ -327,12 +334,6 @@ impl Parser {
     }
     
     fn parse_expression(&mut self) -> Result<Expression, Error> {
-        const INFIX_LEXEMES: [LexemeKind; 10] = [
-            LexemeKind::DoubleEquals, LexemeKind::NotEquals, LexemeKind::LessEquals,
-            LexemeKind::GreaterEquals, LexemeKind::Less, LexemeKind::Greater,
-            LexemeKind::Plus, LexemeKind::Minus, LexemeKind::Star, LexemeKind::Slash
-        ];
-
         fn parse_term(lexeme: &Lexeme) -> Result<Expression, Error> {
             match &lexeme.kind {
                 LexemeKind::Identifier(identifier) => Ok(Expression::Identifier(identifier.to_owned())),
@@ -351,47 +352,141 @@ impl Parser {
                 })
             }
         }
-    
+        
         self.expect(&[
             // for binary operations or single values
             LexemeKind::Identifier(String::new()),
             LexemeKind::NumberLiteral(String::new()),
             LexemeKind::StringLiteral(String::new()),
             LexemeKind::LeftParen,
+
+            // for function and procedure definition
+            LexemeKind::Func,
+            LexemeKind::Proc
         ])?;
 
-        let operand_1 = match &self.current_lexeme {
-            Some(lexeme @ Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::StringLiteral(_) | LexemeKind::NumberLiteral(_), ..}) => {
-                parse_term(lexeme)?
+        match &self.current_lexeme {
+            Some(Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::NumberLiteral(_) | LexemeKind::StringLiteral(_) | LexemeKind::LeftParen, ..}) => {        
+                let operand_1 = match &self.current_lexeme {
+                    Some(lexeme @ Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::StringLiteral(_) | LexemeKind::NumberLiteral(_), ..}) => {
+                        parse_term(lexeme)?
+                    },
+
+                    Some(Lexeme{kind: LexemeKind::LeftParen, .. }) => {
+                        self.advance();
+                        let expression = self.parse_expression()?;
+
+                        self.advance();
+                        self.expect(&[LexemeKind::RightParen])?;
+      
+                        expression
+                    }
+
+                    _ => unreachable!()
+                };
+
+                if let Ok(operation) = BinaryOperation::from_lexeme(self.next_lexeme.as_ref().unwrap()) {
+                    self.advance(); // skip opereation
+
+                    self.advance();
+                    let operand_2 = self.parse_expression()?;
+        
+                    Ok(Expression::Binary {
+                        operation,
+                        operand_1: Box::new(operand_1),
+                        operand_2: Box::new(operand_2),
+                    })
+                } else {
+                    Ok(operand_1)
+                }    
+            },
+            
+            Some(Lexeme{kind: lexeme_kind @ (LexemeKind::Func | LexemeKind::Proc), ..}) => {
+                let is_proc = *lexeme_kind == LexemeKind::Proc;
+
+                // procedure definition grammar
+                // 'proc' '(' [ IDENTIFIER ':' TYPE { ',' IDENTIFIER ':' TYPE } ] ')' STATEMENT
+
+                // function definition grammar
+                // 'func' '(' [ IDENTIFIER ':' TYPE { ',' IDENTIFIER ':' TYPE } ] '->' TYPE STATEMENT
+
+                self.advance();
+                self.expect(&[LexemeKind::LeftParen])?;
+
+                let mut args: Vec<IdentifierAndType> = Vec::new();
+
+                self.advance();
+                self.expect(&[
+                    LexemeKind::RightParen,
+                    LexemeKind::Identifier(String::new())
+                ])?;
+
+                // parse the first argument (if there are any)
+                match &self.current_lexeme {
+                    Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
+                    Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
+                        args.push(self.parse_identifier_and_type()?);
+
+                        // parse the rest
+                        loop {
+                            self.advance();
+                            self.expect(&[
+                                LexemeKind::RightParen,
+                                LexemeKind::Comma
+                            ])?;
+
+                            match &self.current_lexeme {
+                                Some(Lexeme{kind: LexemeKind::RightParen, ..}) => break,
+                                Some(Lexeme{kind: LexemeKind::Comma, ..}) => {
+                                    self.advance();
+                                    args.push(self.parse_identifier_and_type()?);
+                                },
+
+                                _ => unreachable!()
+                            }
+                        }
+                    }
+
+                    _ => unreachable!()
+                }
+
+                // right now we are at right paren
+
+                self.advance();
+                let return_type = if !is_proc {
+                    self.expect(&[LexemeKind::Arrow])?;
+
+                    self.advance();
+                    let result = Some(self.parse_type()?);
+
+                    self.advance();
+
+                    result
+                } else {
+                    None
+                };
+
+                // self.advance();
+                let body = Box::new(self.parse_statement()?);
+
+                if is_proc {
+                    Ok(Expression::ProcedureDefinition {
+                        args,
+                        body
+                    })
+                } else {
+                    Ok(Expression::FunctionDefinition {
+                        args,
+                        return_type: return_type.unwrap(),
+                        body
+                    })                    
+                }
+                
+                // todo!();
             },
 
-            Some(Lexeme{kind: LexemeKind::LeftParen, .. }) => {
-                self.advance();
-                let expression = self.parse_expression()?;
-
-                self.advance();
-                self.expect(&[LexemeKind::RightParen])?;
-      
-                expression
-            }
-
             _ => unreachable!()
-        };
-
-        if let Ok(operation) = BinaryOperation::from_lexeme(self.next_lexeme.as_ref().unwrap()) {
-            self.advance(); // skip opereation
-
-            self.advance();
-            let operand_2 = self.parse_expression()?;
-        
-            Ok(Expression::Binary {
-                operation,
-                operand_1: Box::new(operand_1),
-                operand_2: Box::new(operand_2),
-            })
-        } else {
-            Ok(operand_1)
-        }    
+        }
     }
     
     fn parse_type(&mut self) -> Result<Type, Error> {
@@ -463,6 +558,8 @@ impl Parser {
                     _ => unreachable!()
                 }
 
+                // right now we are at right paren
+                
                 if is_proc {
                     return Ok(Type::Procedure {
                         param_types
@@ -485,4 +582,24 @@ impl Parser {
         }
     }
 
+    fn parse_identifier_and_type(&mut self) -> Result<IdentifierAndType, Error> {
+        self.expect(&[LexemeKind::Identifier(String::new())])?;
+
+        let identifier = match &self.current_lexeme {
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+            _ => unreachable!()
+        };
+
+        self.advance();
+        self.expect(&[LexemeKind::Colon])?;
+        
+        self.advance();
+        let data_type = self.parse_type()?;
+
+        Ok(IdentifierAndType {
+            identifier,
+            data_type
+        })
+    }
+    
 }
