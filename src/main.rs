@@ -95,12 +95,12 @@ fn main() {
     }
 
     let mut parser = Parser::new(lexemes.as_slice());
-    let syntax_tree = match parse(&mut parser) {
+    let syntax_tree = match parser.parse_statement() {
         Ok(statement) => statement,
         Err(error) => {
             println!("error: {}", error.message);
+            println!("   --> main.bling");
             for line in error.lines.iter() {
-                println!("   --> main.bling");
                 println!("{:>6} | {}", line, source_code_lines.get(line - 1).unwrap());
             }
             return;
