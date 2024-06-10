@@ -81,7 +81,7 @@ pub enum Expression {
 #[derive(Debug)]
 pub enum Statement {
     Compound(Vec<Statement>),
-    Return(Expression),
+    Return(Option<Expression>),
     
     DeclareConstant {
         identifier: String,
@@ -209,10 +209,16 @@ impl Parser {
             },
 
             Some(Lexeme{kind: LexemeKind::Return, ..}) => {
+                // return grammar
+                // 'return' [ EXPRESSION ] ';'
+                
                 self.advance();
-                let expression = self.parse_expression()?;
+                let expression = self.parse_expression().ok();
 
-                self.advance();
+                if expression.is_some() {
+                    self.advance();
+                }
+                
                 self.expect(&[LexemeKind::Semicolon])?;
                 
                 Ok(Statement::Return(expression))
@@ -639,5 +645,4 @@ impl Parser {
             data_type
         })
     }
-    
 }
