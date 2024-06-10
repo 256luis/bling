@@ -104,7 +104,9 @@ pub enum Statement {
         condition: Expression,
         on_true: Box<Statement>,
         on_false: Option<Box<Statement>>
-    }
+    },
+
+    ProcedureCall(Vec<Expression>),
 }
 
 pub struct Parser {
@@ -122,6 +124,21 @@ impl Parser {
         LexemeKind::Identifier(String::new()),
         LexemeKind::Return,
         LexemeKind::If,
+    ];
+
+    const EXPRESSION_START_LEXEMES: [LexemeKind; 7] = [
+        // for binary operations or single values
+        LexemeKind::Identifier(String::new()),
+        LexemeKind::NumberLiteral(String::new()),
+        LexemeKind::StringLiteral(String::new()),
+        LexemeKind::LeftParen,
+
+        // for function and procedure definition
+        LexemeKind::Func,
+        LexemeKind::Proc,
+
+        // for compound expressions
+        LexemeKind::LeftBrace,  
     ];
     
     pub fn new(lexemes: &[Lexeme]) -> Parser {
@@ -199,6 +216,8 @@ impl Parser {
     }
     
     pub fn parse_statement(&mut self) -> Result<Statement, Error> {
+        println!("parse_statement");
+        
         self.expect(&Self::STATEMENT_START_LEXEMES)?;
         
         match self.current_lexeme {
@@ -211,7 +230,14 @@ impl Parser {
             },
 
             Some(Lexeme{kind: LexemeKind::Identifier(_), ..}) => {
-                self.parse_statement_assign()
+                // todo: add checks for next lexeme
+                
+                match &self.next_lexeme {
+                    Some(Lexeme{kind: LexemeKind::Equals, ..}) => self.parse_statement_assign(),
+                    Some(Lexeme{kind: LexemeKind::LeftParen, ..}) => self.parse_statement_procedure_call(),
+                    _ => todo!()
+                }
+                
             },
 
             Some(Lexeme{kind: LexemeKind::Return, ..}) => {
@@ -226,6 +252,55 @@ impl Parser {
         }
     }
 
+    fn parse_statement_procedure_call(&mut self) -> Result<Statement, Error> {
+        // procedure call grammar
+        // IDENTIFIER '(' [ EXPRESSION { ',' EXPRESSION } ] ')' ';'
+
+        let identifier = self.current_lexeme.as_ref().unwrap();
+
+        self.advance();
+        self.expect(&Self::EXPRESSION_START_LEXEMES).or(
+            self.expect(&[LexemeKind::LeftParen]) // explicitly putting this here
+        )?;
+
+        // dbg!(&self.current_lexeme);
+        // panic!();
+
+        self.advance();
+        let mut args: Vec<Expression> = Vec::new();
+        match &self.current_lexeme {
+            // no args
+            Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
+            Some(_) => {
+                args.push(self.parse_expression()?);
+
+                loop {
+                    self.advance();
+                    self.expect(&[
+                        LexemeKind::RightParen,
+                        LexemeKind::Comma
+                    ])?;
+                    
+                    match &self.current_lexeme {
+                        Some(Lexeme{kind: LexemeKind::RightParen, ..}) => break,
+                        Some(Lexeme{kind: LexemeKind::Comma, ..}) => {
+                            self.advance();
+                            args.push(self.parse_expression()?);
+                        },
+
+                        _ => unreachable!()
+                    }
+                }
+            },
+
+            _ => unreachable!()
+        }
+
+        self.advance();
+        self.expect(&[LexemeKind::Semicolon])?;
+        
+        Ok(Statement::ProcedureCall(args))
+    }
     fn parse_statement_if(&mut self) -> Result<Statement, Error> {
         // if statement grammar
         // 'if' EXPRESSION STATEMENT [ 'else' STATEMENT ]
@@ -420,20 +495,7 @@ impl Parser {
             }
         }
         
-        self.expect(&[
-            // for binary operations or single values
-            LexemeKind::Identifier(String::new()),
-            LexemeKind::NumberLiteral(String::new()),
-            LexemeKind::StringLiteral(String::new()),
-            LexemeKind::LeftParen,
-
-            // for function and procedure definition
-            LexemeKind::Func,
-            LexemeKind::Proc,
-
-            // for compound expressions
-            LexemeKind::LeftBrace,
-        ])?;
+        self.expect(&Self::EXPRESSION_START_LEXEMES)?;
 
         match &self.current_lexeme {
             Some(Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::NumberLiteral(_) | LexemeKind::StringLiteral(_) | LexemeKind::LeftParen, ..}) => {        
@@ -554,6 +616,8 @@ impl Parser {
 
             Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
                 // todo (maybe) allow implicit returns?
+
+                println!("here");
                 
                 let mut statements: Vec<Statement> = Vec::new();
 
@@ -688,4 +752,5 @@ impl Parser {
             data_type
         })
     }
+
 }
