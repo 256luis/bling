@@ -63,13 +63,13 @@ pub enum Expression {
 
     ProcedureDefinition {
         args: Vec<IdentifierAndType>,
-        body: Box<Statement>
+        body: Box<Expression>
     },
 
     FunctionDefinition {
         args: Vec<IdentifierAndType>,
         return_type: Type,
-        body: Box<Statement>
+        body: Box<Expression>
     },
 
     Compound {
@@ -445,7 +445,7 @@ impl Parser {
                 // parse the first argument (if there are any)
                 match &self.current_lexeme {
                     Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
-                    Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
+                    Some(Lexeme{kind: LexemeKind::Identifier(_), ..}) => {
                         args.push(self.parse_identifier_and_type()?);
 
                         // parse the rest
@@ -487,7 +487,7 @@ impl Parser {
                     None
                 };
 
-                let body = Box::new(self.parse_statement()?);
+                let body = Box::new(self.parse_expression()?);
 
                 if is_proc {
                     Ok(Expression::ProcedureDefinition {
