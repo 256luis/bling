@@ -100,6 +100,11 @@ pub enum Statement {
         value: Expression,
     },
 
+    If {
+        condition: Expression,
+        on_true: Box<Statement>,
+        on_false: Option<Box<Statement>>
+    }
 }
 
 pub struct Parser {
@@ -110,12 +115,13 @@ pub struct Parser {
 }
 
 impl Parser {
-    const STATEMENT_START_LEXEMES: [LexemeKind; 5] = [
+    const STATEMENT_START_LEXEMES: [LexemeKind; 6] = [
         LexemeKind::LeftBrace,
         LexemeKind::Const,
         LexemeKind::Let,
         LexemeKind::Identifier(String::new()),
         LexemeKind::Return,
+        LexemeKind::If,
     ];
     
     pub fn new(lexemes: &[Lexeme]) -> Parser {
@@ -197,38 +203,75 @@ impl Parser {
         
         match self.current_lexeme {
             Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
-                self.parse_compound()
+                self.parse_statement_compound()
             },
         
             Some(Lexeme{kind: LexemeKind::Const | LexemeKind::Let, ..}) => {
-                self.parse_declare()
+                self.parse_statement_declare()
             },
 
             Some(Lexeme{kind: LexemeKind::Identifier(_), ..}) => {
-                self.parse_assign()
+                self.parse_statement_assign()
             },
 
             Some(Lexeme{kind: LexemeKind::Return, ..}) => {
-                // return grammar
-                // 'return' [ EXPRESSION ] ';'
-                
-                self.advance();
-                let expression = self.parse_expression().ok();
-
-                if expression.is_some() {
-                    self.advance();
-                }
-                
-                self.expect(&[LexemeKind::Semicolon])?;
-                
-                Ok(Statement::Return(expression))
+                self.parse_statement_return()
+            },
+        
+            Some(Lexeme{kind: LexemeKind::If, ..}) => {
+                self.parse_statement_if()
             },
             
             _ => unreachable!()
         }
     }
 
-    fn parse_assign(&mut self) -> Result<Statement, Error> {
+    fn parse_statement_if(&mut self) -> Result<Statement, Error> {
+        // if statement grammar
+        // 'if' EXPRESSION STATEMENT [ 'else' STATEMENT ]
+
+        self.advance();
+        let condition = self.parse_expression()?;
+
+        self.advance();
+        let on_true = Box::new(self.parse_statement()?);
+        
+        let on_false = match &self.next_lexeme {
+            Some(Lexeme{kind: LexemeKind::Else, ..}) => {
+                self.advance(); // skip the else
+                self.advance();
+                Some(Box::new(self.parse_statement()?))        
+            },
+
+            _ => None
+        };
+
+        Ok(Statement::If {
+            condition,
+            on_true,
+            on_false
+        })
+        
+        // todo!()
+    }
+    
+    fn parse_statement_return(&mut self) -> Result<Statement, Error> {
+        // return grammar
+        // 'return' [ EXPRESSION ] ';'
+                
+        self.advance();
+        let expression = self.parse_expression().ok();
+
+        if expression.is_some() {
+            self.advance();
+        }
+                
+        self.expect(&[LexemeKind::Semicolon])?;
+                
+        Ok(Statement::Return(expression))        
+    }
+    
+    fn parse_statement_assign(&mut self) -> Result<Statement, Error> {
         // assignment grammar
         // IDENTIFIER '=' EXPRESSION ';'
         let identifier = match &self.current_lexeme {
@@ -253,7 +296,7 @@ impl Parser {
         })
     }
     
-    fn parse_compound(&mut self) -> Result<Statement, Error> { 
+    fn parse_statement_compound(&mut self) -> Result<Statement, Error> { 
         let mut statements: Vec<Statement> = Vec::new();
 
         loop {
@@ -271,7 +314,7 @@ impl Parser {
         Ok(Statement::Compound(statements))
     }
 
-    fn parse_declare(&mut self) -> Result<Statement, Error> {
+    fn parse_statement_declare(&mut self) -> Result<Statement, Error> {
         println!("parse_const_let");
 
         // constant declaration grammar
