@@ -70,12 +70,18 @@ pub enum Expression {
         args: Vec<IdentifierAndType>,
         return_type: Type,
         body: Box<Statement>
-    }
+    },
+
+    Compound {
+        statements: Vec<Statement>,
+    //    expression: Box<Expression>
+    },
 }
 
 #[derive(Debug)]
 pub enum Statement {
     Compound(Vec<Statement>),
+    Return(Expression),
     
     DeclareConstant {
         identifier: String,
@@ -92,7 +98,8 @@ pub enum Statement {
     Assign {
         identifier: String,
         value: Expression,
-    }
+    },
+
 }
 
 pub struct Parser {
@@ -103,6 +110,14 @@ pub struct Parser {
 }
 
 impl Parser {
+    const STATEMENT_START_LEXEMES: [LexemeKind; 5] = [
+        LexemeKind::LeftBrace,
+        LexemeKind::Const,
+        LexemeKind::Let,
+        LexemeKind::Identifier(String::new()),
+        LexemeKind::Return,
+    ];
+    
     pub fn new(lexemes: &[Lexeme]) -> Parser {
         let mut lexemes_iter = Vec::from(lexemes).into_iter();
         let next_lexeme = lexemes_iter.next();
@@ -178,12 +193,7 @@ impl Parser {
     }
     
     pub fn parse_statement(&mut self) -> Result<Statement, Error> {
-        self.expect(&[
-            LexemeKind::LeftBrace,
-            LexemeKind::Const,
-            LexemeKind::Let,
-            LexemeKind::Identifier(String::new())
-        ])?;
+        self.expect(&Self::STATEMENT_START_LEXEMES)?;
         
         match self.current_lexeme {
             Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
@@ -197,11 +207,18 @@ impl Parser {
             Some(Lexeme{kind: LexemeKind::Identifier(_), ..}) => {
                 self.parse_assign()
             },
-        
-            _ => {
-                // println!("not yet implemented\n{:#?}\n", lexemes);
-                todo!()
+
+            Some(Lexeme{kind: LexemeKind::Return, ..}) => {
+                self.advance();
+                let expression = self.parse_expression()?;
+
+                self.advance();
+                self.expect(&[LexemeKind::Semicolon])?;
+                
+                Ok(Statement::Return(expression))
             },
+            
+            _ => unreachable!()
         }
     }
 
@@ -238,7 +255,8 @@ impl Parser {
             match &self.current_lexeme {
                 Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => {
                     break;
-                }
+                },
+                
                 Some(_) => statements.push(self.parse_statement()?),
                 None => unreachable!(),
             }
@@ -362,7 +380,10 @@ impl Parser {
 
             // for function and procedure definition
             LexemeKind::Func,
-            LexemeKind::Proc
+            LexemeKind::Proc,
+
+            // for compound expressions
+            LexemeKind::LeftBrace,
         ])?;
 
         match &self.current_lexeme {
@@ -466,7 +487,6 @@ impl Parser {
                     None
                 };
 
-                // self.advance();
                 let body = Box::new(self.parse_statement()?);
 
                 if is_proc {
@@ -481,10 +501,28 @@ impl Parser {
                         body
                     })                    
                 }
-                
-                // todo!();
             },
 
+            Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
+                // todo (maybe) allow implicit returns?
+                
+                let mut statements: Vec<Statement> = Vec::new();
+
+                loop {
+                    self.advance();
+                    match &self.current_lexeme {
+                        Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => {
+                            break;
+                        },
+                
+                        Some(_) => statements.push(self.parse_statement()?),
+                        None => unreachable!(),
+                    }
+                }
+
+                Ok(Expression::Compound{statements})
+            },
+            
             _ => unreachable!()
         }
     }
