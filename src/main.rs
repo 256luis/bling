@@ -1,8 +1,13 @@
 mod lexer;
 mod error;
 mod parser;
+// mod semantic;
+mod analyzer;
+
 use lexer::*;
 use parser::*;
+use analyzer::*;
+use error::*;
 
 fn main() {
     // load source code to compile
@@ -81,34 +86,74 @@ fn main() {
     let lexemes = match source_code.lex() {
         Ok(lexemes) => lexemes,
         Err(error) => {
-            println!("error: {}", error.message);
+            match error.kind {
+                LexerError::UnclosedString => println!("error: unclosed string literal"),
+                LexerError::MismatchedBrackets => println!("error: mismatched brackets"),
+                LexerError::InvalidSymbol { symbol_name } => println!("error: invalid symbol `{}`", symbol_name),
+            }
+            
             for line in error.lines.iter() {
                 println!("   --> main.bling");
                 println!("{:>6} | {}", line, source_code_lines.get(line - 1).unwrap());
             }
+            println!("");
             return;
         }
     };
-    println!("\nLEXER OUTPUT: ");
-    for (i, lexeme) in lexemes.iter().enumerate() {
-        println!("{}: {:?}", i, lexeme);
-    }
+    
+    // println!("\nLEXER OUTPUT: ");
+    // for (i, lexeme) in lexemes.iter().enumerate() {
+    //     println!("{}: {:?}", i, lexeme);
+    // }
 
     let mut parser = Parser::new(lexemes.as_slice());
-    let syntax_tree = match parser.parse_statement() {
+    let mut syntax_tree = match parser.parse_statement() {
         Ok(statement) => statement,
         Err(error) => {
-            println!("error: {}", error.message);
-            println!("   --> main.bling");
+            match error.kind {
+                ParserError::SyntaxError {expected, found} => println!("error: expected {}, found {}", expected, found),
+            }
+            
             for line in error.lines.iter() {
+                println!("   --> main.bling");
                 println!("{:>6} | {}", line, source_code_lines.get(line - 1).unwrap());
+            }
+            println!("");
+            return;
+        }
+    };
+
+    let mut analyzer = Analyzer::new();
+    match analyzer.analyze(&mut syntax_tree) {
+        Ok(()) => {},
+        Err(errors) => {
+            for error in errors {
+                match error.kind {
+                    SemanticError::UndeclaredSymbol { symbol_name } => println!("error: undeclared symbol `{}`", symbol_name),
+                    SemanticError::RedeclaredSymbol { symbol_name } => println!("error: redeclaration of symbol `{}`", symbol_name),
+                    SemanticError::TypeMismatch { expected, found } => println!("error: expected type `{}`, found `{}`", expected, found),
+                    SemanticError::InvalidOperation { operation, data_types } => println!("error: cannot perform operation on types `{}` and `{}`", data_types[0].to_string(), data_types[1].to_string()),
+                    SemanticError::InvalidArgumentCount { expected, found } => println!("error: expected {} arguments, found {}", expected, found),
+                    SemanticError::NotFunction { symbol_name } => println!("error: `{}` is not a function", symbol_name),
+                    SemanticError::NotProcedure { symbol_name } => println!("error: `{}` is not a procedure", symbol_name),
+                    SemanticError::ConstantReassignment { symbol_name } =>println!("error: cannot reassign `{}` because it is a constant", symbol_name)
+                }
+
+                println!("   --> main.bling");
+                    
+                for line in error.lines.iter() {
+                    println!("{:>6} | {}", line, source_code_lines.get(line - 1).unwrap());
+                }
+                println!("");
             }
             return;
         }
-    };
+    }
 
-    println!("\nPARSER OUTPUT:");
-    println!("{:#?}", syntax_tree);
-    
+    dbg!(analyzer);
+
+    // println!("\nAFTER SEMANTIC ANALYSIS AND TYPE INFERENCE:");
+    // println!("{:#?}", syntax_tree);
+        
     // println!("{}", asd);
 }

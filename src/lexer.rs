@@ -27,6 +27,10 @@ pub enum LexemeKind {
     Return,
     True,
     False,
+    Int,
+    Float,
+    String,
+    Bool,
     
     LeftParen,
     RightParen,
@@ -92,6 +96,10 @@ impl ToString for LexemeKind {
             Self::Return => "return",
             Self::True   => "true",
             Self::False  => "false",
+            Self::Int  => "int",
+            Self::Float => "float",
+            Self::String   => "string",
+            Self::Bool  => "bool",
             
             Self::LeftParen    => "(",
             Self::RightParen   => ")",
@@ -135,12 +143,12 @@ pub struct Lexeme {
 }
 
 trait ToLexeme {
-    fn to_lexeme(&self, line: usize) -> Result<Lexeme, Error>;
+    fn to_lexeme(&self, line: usize) -> Result<Lexeme, Error<LexerError>>;
 }
 
 impl ToLexeme for String {
     // IMPORTANT!!!!! function does not handle StringLiterals
-    fn to_lexeme(&self, line: usize) -> Result<Lexeme, Error> {
+    fn to_lexeme(&self, line: usize) -> Result<Lexeme, Error<LexerError>> {
         match self.as_str() {
             "import" => Ok(Lexeme{kind: LexemeKind::Import,        line}),
             "let"    => Ok(Lexeme{kind: LexemeKind::Let,           line}),
@@ -154,6 +162,10 @@ impl ToLexeme for String {
             "return" => Ok(Lexeme{kind: LexemeKind::Return,        line}),
             "true"   => Ok(Lexeme{kind: LexemeKind::True,          line}),
             "false"  => Ok(Lexeme{kind: LexemeKind::False,         line}),
+            "int"    => Ok(Lexeme{kind: LexemeKind::Int,           line}),
+            "float"  => Ok(Lexeme{kind: LexemeKind::Float,         line}),
+            "string" => Ok(Lexeme{kind: LexemeKind::String,        line}),
+            "bool"   => Ok(Lexeme{kind: LexemeKind::Bool,          line}),
             
             "("      => Ok(Lexeme{kind: LexemeKind::LeftParen,     line}),
             ")"      => Ok(Lexeme{kind: LexemeKind::RightParen,    line}),
@@ -199,8 +211,11 @@ impl ToLexeme for String {
                         if i.is_alphanumeric() ||  VALID_NON_ALPHANUM_IDENTIFIERS.contains(&i) {
                             continue;
                         }
-                        return Err(Error{
-                            message: format!("invalid symbol `{}`", self.to_owned()),
+                        return Err(Error {
+                            kind: LexerError::InvalidSymbol {
+                                symbol_name: self.to_owned()
+                            },
+                            //message: format!("invalid symbol `{}`", self.to_owned()),
                             lines: vec![line],
                         });
                     }
@@ -216,11 +231,11 @@ impl ToLexeme for String {
 }
 
 pub trait Lexer {
-    fn lex(&self) -> Result<Vec<Lexeme>, Error>;
+    fn lex(&self) -> Result<Vec<Lexeme>, Error<LexerError>>;
 }
 
 impl Lexer for String {
-    fn lex(&self) -> Result<Vec<Lexeme>, Error> {
+    fn lex(&self) -> Result<Vec<Lexeme>, Error<LexerError>> {
         // println!("in lexer");
         
         let mut lexemes = Vec::<Lexeme>::new();
@@ -230,7 +245,7 @@ impl Lexer for String {
         let mut line = 1usize;
         let mut line_string_start = 0usize;
         
-        let complete_token = |b: &mut String, l: &mut Vec<Lexeme>, line: usize| -> Result<(), Error>{
+        let complete_token = |b: &mut String, l: &mut Vec<Lexeme>, line: usize| -> Result<(), Error<LexerError>>{
             if !b.is_empty() {            
                 let lexeme = b.to_lexeme(line)?;
                 l.push(lexeme);
@@ -309,8 +324,9 @@ impl Lexer for String {
 
         // if by the end, we are still inside a string literal, thats an error
         if in_string {
-            return Err(Error{
-                message: String::from("unclosed string literal"),
+            return Err(Error {
+                kind: LexerError::UnclosedString,
+                // message: String::from("unclosed string literal"),
                 lines: vec![line_string_start],
             })
         }
@@ -366,7 +382,8 @@ impl Lexer for String {
                     let top = left_bracket_stack
                         .last()
                         .ok_or(Error {
-                            message: String::from("mismatched brackets"),
+                            kind: LexerError::MismatchedBrackets,
+                            // message: String::from("mismatched brackets"),
                             lines: vec![lexeme.line],
                         })?.clone();
                     
@@ -378,7 +395,8 @@ impl Lexer for String {
                         lines.dedup();
                         
                         return Err(Error {
-                            message: String::from("mismatched brackets"),
+                            kind: LexerError::MismatchedBrackets,
+                            // message: String::from("mismatched brackets"),
                             lines
                         })
                     }
@@ -395,8 +413,9 @@ impl Lexer for String {
             lines.sort();
             lines.dedup();
             
-            return Err(Error{
-                message: String::from("mismatched brackets"),
+            return Err(Error {
+                kind: LexerError::MismatchedBrackets,
+                // message: String::from("mismatched brackets"),
                 lines,
             })            
         }

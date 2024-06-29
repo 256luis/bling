@@ -1,8 +1,14 @@
 use crate::{error::*, lexer::*};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Symbol {
+    pub name: String,
+    pub line: usize
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Type {
-    Int, Float, String, UserDefined(String),
+    Integer, Float, String, Boolean, UserDefined(Symbol),
 
     Procedure {
         param_types: Vec<Type>
@@ -14,20 +20,49 @@ pub enum Type {
     },
 }
 
-#[derive(Debug)]
-pub struct IdentifierAndType {
-    identifier: String,
-    data_type: Type
+impl ToString for Type {
+    fn to_string(&self) -> String {
+        match self {
+            Type::Integer => String::from("int"),
+            Type::Float => String::from("float"),
+            Type::String => String::from("string"),
+            Type::Boolean => String::from("bool"),
+            Type::UserDefined(symbol) => symbol.name.to_owned(),
+            
+            Type::Procedure { param_types } => {
+                format!("proc({})", param_types
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "))
+            },
+
+            Type::Function { param_types, return_type } => {
+                format!("func({}) -> {}", param_types
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                    return_type.to_string())
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
+pub struct IdentifierAndType {
+    pub identifier: Symbol,
+    pub data_type: Type
+}
+
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Clone, Copy)]
 pub enum BinaryOperation {
     Add, Subtract, Multiply, Divide, Modulo,
     EqualTo, NotEqualTo, LessEqualTo, GreaterEqualTo, LessThan, GreaterThan,
 }
 
 impl BinaryOperation {
-    fn from_lexeme(lexeme: &Lexeme) -> Result<Self, Error> {
+    fn from_lexeme(lexeme: &Lexeme) -> Result<Self, Error<ParserError>> {
         match lexeme.kind {
             LexemeKind::DoubleEquals  => Ok(BinaryOperation::EqualTo),
             LexemeKind::NotEquals     => Ok(BinaryOperation::NotEqualTo),
@@ -41,7 +76,11 @@ impl BinaryOperation {
             LexemeKind::Slash         => Ok(BinaryOperation::Divide),
             LexemeKind::Percent       => Ok(BinaryOperation::Modulo),
             _ => Err(Error {
-                message: format!("expected binary operator, found `{}`", lexeme.kind.to_string()),
+                kind: ParserError::SyntaxError {
+                    expected: String::from("binary operator"),
+                    found: format!("`{}`", lexeme.kind.to_string())
+                },
+                // message: format!("expected binary operator, found `{}`", lexeme.kind.to_string()),
                 lines: vec![lexeme.line]
             })   
         }
@@ -50,81 +89,95 @@ impl BinaryOperation {
 
 #[derive(Debug)]
 pub enum Expression {
-    Identifier(String),
+    Identifier(Symbol),
     StringLiteral(String),
     IntegerLiteral(i32),
     FloatLiteral(f32),
-
+    True,
+    False,
+    
     Binary {
         operation: BinaryOperation,
-        operand_1: Box<Expression>,
-        operand_2: Box<Expression>,
+        operand_1: Box<ASTNode<Expression>>,
+        operand_2: Box<ASTNode<Expression>>,
     },
 
     ProcedureDefinition {
         args: Vec<IdentifierAndType>,
-        body: Box<Expression>
+        body: Box<ASTNode<Statement>>
     },
 
     FunctionDefinition {
         args: Vec<IdentifierAndType>,
         return_type: Type,
-        body: Box<Expression>
-    },
-
-    Compound {
-        statements: Vec<Statement>,
-    //    expression: Box<Expression>
+        body: Box<ASTNode<Statement>>
     },
 
     FunctionCall {
-        identifier: String,
-        args: Vec<Expression>
-    }
+        identifier: Symbol,
+        args: Vec<ASTNode<Expression>>
+    },
 }
 
 #[derive(Debug)]
 pub enum Statement {
-    Compound(Vec<Statement>),
-    Return(Option<Expression>),
+    Compound(Vec<ASTNode<Statement>>),
+    Return(Option<ASTNode<Expression>>),
     
     DeclareConstant {
-        identifier: String,
+        identifier: Symbol,
         data_type: Option<Type>,
-        value: Expression,
+        value: ASTNode<Expression>,
     },
 
     DeclareVariable {
-        identifier: String,
+        identifier: Symbol,
         data_type: Option<Type>,
-        value: Option<Expression>,
+        value: Option<ASTNode<Expression>>,
     },
 
     Assign {
-        identifier: String,
-        value: Expression,
+        identifier: Symbol,
+        value: ASTNode<Expression>,
     },
 
     If {
-        condition: Expression,
-        on_true: Box<Statement>,
-        on_false: Option<Box<Statement>>
+        condition: ASTNode<Expression>,
+        on_true: Box<ASTNode<Statement>>,
+        on_false: Option<Box<ASTNode<Statement>>>
     },
 
     ProcedureCall{
-        identifier: String,
-        args: Vec<Expression>
+        identifier: Symbol,
+        args: Vec<ASTNode<Expression>>
     },
+}
+
+#[derive(Debug)]
+pub struct ASTNode<T> {
+    pub kind: T,
+    pub lines: Vec<usize>
 }
 
 pub struct Parser {
     lexemes_iter: Box<dyn Iterator<Item = Lexeme>>,
     prev_lexeme: Lexeme,
     current_lexeme: Option<Lexeme>,
-    next_lexeme: Option<Lexeme>
+    next_lexeme: Option<Lexeme>,
+    current_line: usize,
 }
 
 impl Parser {
+    const TYPE_LEXEMES: [LexemeKind; 7] = [
+        LexemeKind::Int,
+        LexemeKind::Float,
+        LexemeKind::String,
+        LexemeKind::Bool,
+        LexemeKind::Identifier(String::new()),
+        LexemeKind::Proc,
+        LexemeKind::Func,
+    ];
+    
     const STATEMENT_START_LEXEMES: [LexemeKind; 6] = [
         LexemeKind::LeftBrace,
         LexemeKind::Const,
@@ -134,24 +187,28 @@ impl Parser {
         LexemeKind::If,
     ];
 
-    const EXPRESSION_START_LEXEMES: [LexemeKind; 7] = [
+    const EXPRESSION_START_LEXEMES: [LexemeKind; 8] = [
         // for binary operations or single values
         LexemeKind::Identifier(String::new()),
         LexemeKind::NumberLiteral(String::new()),
         LexemeKind::StringLiteral(String::new()),
+        LexemeKind::True,
+        LexemeKind::False,
         LexemeKind::LeftParen,
-
+        
+        
         // for function and procedure definition
         LexemeKind::Func,
         LexemeKind::Proc,
 
         // for compound expressions
-        LexemeKind::LeftBrace,  
+        // LexemeKind::LeftBrace,  
     ];
     
     pub fn new(lexemes: &[Lexeme]) -> Parser {
         let mut lexemes_iter = Vec::from(lexemes).into_iter();
         let next_lexeme = lexemes_iter.next();
+        let current_line = 0usize;
         
         let mut parser = Parser {
             // lexemes_iter: Box::new(Vec::from(lexemes).into_iter()),
@@ -159,6 +216,7 @@ impl Parser {
             prev_lexeme: Lexeme{kind: LexemeKind::LeftBrace, line: 1},
             current_lexeme: None,
             next_lexeme,
+            current_line
         };
 
         parser.advance();
@@ -167,16 +225,24 @@ impl Parser {
 
     fn advance(&mut self) {
         if let Some(lexeme) = &self.current_lexeme {
-            self.prev_lexeme = lexeme.clone()
+            self.prev_lexeme = lexeme.clone();
         }
         
         self.current_lexeme = self.next_lexeme.clone();
         self.next_lexeme = self.lexemes_iter.next();
 
-        dbg!(&self.current_lexeme);
+        // is there a better way to do this
+        self.current_line = if self.current_lexeme.is_some() {
+            self.current_lexeme.clone().unwrap().line
+        } else {
+            0
+        };
+        
+        
+        // dbg!(&self.current_lexeme, self.current_line);
     }
 
-    fn expect(&self, lexeme_kinds: &[LexemeKind]) -> Result<(), Error> {
+    fn expect(&self, lexeme_kinds: &[LexemeKind]) -> Result<(), Error<ParserError>> {
         let mut expected_lexemes_strings: Vec<String> = Vec::new();
         for lexeme_kind in lexeme_kinds {
             match lexeme_kind {
@@ -191,7 +257,11 @@ impl Parser {
         
         match &self.current_lexeme {
             None | Some(Lexeme{kind: LexemeKind::RightBrace, line: 0}) => Err(Error {
-                message: format!("expected {}, found nothing", expected_lexemes_list_message),
+                kind: ParserError::SyntaxError {
+                    expected: expected_lexemes_list_message,
+                    found: String::from("nothing")
+                },
+                // message: format!("expected {}, found nothing", expected_lexemes_list_message),
                 lines: vec![self.prev_lexeme.line]
             }),
             
@@ -215,16 +285,76 @@ impl Parser {
                 }
 
                 Err(Error {
-                    message: format!("expected {}, found `{}`",
-                        expected_lexemes_list_message, lexeme.kind.to_string()),
+                    kind: ParserError::SyntaxError {
+                        expected: expected_lexemes_list_message,
+                        found: format!("`{}`", lexeme.kind.to_string())
+                    },
+                    // message: format!("expected {}, found `{}`", "A", "A"),
+                        //expected_lexemes_list_message, lexeme.kind.to_string()),
                     lines: vec![lexeme.line]
                 })
             }
         }
     }
+
+
+    fn expect_next(&self, lexeme_kinds: &[LexemeKind]) -> Result<(), Error<ParserError>> {
+        let mut expected_lexemes_strings: Vec<String> = Vec::new();
+        for lexeme_kind in lexeme_kinds {
+            match lexeme_kind {
+                LexemeKind::Identifier(_) => expected_lexemes_strings.push(String::from("identifier")),
+                LexemeKind::StringLiteral(_) => expected_lexemes_strings.push(String::from("string literal")),
+                LexemeKind::NumberLiteral(_) => expected_lexemes_strings.push(String::from("number literal")),
+                _ => expected_lexemes_strings.push(format!{"`{}`", lexeme_kind.to_string()})
+            }
+        }
+
+        let expected_lexemes_list_message = expected_lexemes_strings.join(" or ");
+        
+        match &self.next_lexeme {
+            None | Some(Lexeme{kind: LexemeKind::RightBrace, line: 0}) => Err(Error {
+                kind: ParserError::SyntaxError {
+                    expected: expected_lexemes_list_message,
+                    found: String::from("nothing")
+                },
+                // message: format!("expected {}, found nothing", expected_lexemes_list_message),
+                lines: vec![self.prev_lexeme.line]
+            }),
+            
+            Some(lexeme) => {
+                match lexeme.kind {
+                    LexemeKind::Identifier(_) => if lexeme_kinds.contains(&LexemeKind::Identifier(String::new())) {
+                        return Ok(());
+                    },
+
+                    LexemeKind::StringLiteral(_) => if lexeme_kinds.contains(&LexemeKind::StringLiteral(String::new())) {
+                        return Ok(());
+                    },
+                    
+                    LexemeKind::NumberLiteral(_) => if lexeme_kinds.contains(&LexemeKind::NumberLiteral(String::new())) {
+                        return Ok(());
+                    },
+
+                    _ => if lexeme_kinds.contains(&lexeme.kind) {
+                        return Ok(());
+                    }
+                }
+
+                Err(Error {
+                    kind: ParserError::SyntaxError {
+                        expected: expected_lexemes_list_message,
+                        found: format!("`{}`", lexeme.kind.to_string())
+                    },
+                    // message: format!("expected {}, found `{}`", "A", "A"),
+                        //expected_lexemes_list_message, lexeme.kind.to_string()),
+                    lines: vec![lexeme.line]
+                })
+            }
+        }
+    }    
     
-    pub fn parse_statement(&mut self) -> Result<Statement, Error> {
-        println!("parse_statement");
+    pub fn parse_statement(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> {
+        // println!("parse_statement");
         
         self.expect(&Self::STATEMENT_START_LEXEMES)?;
         
@@ -238,14 +368,18 @@ impl Parser {
             },
 
             Some(Lexeme{kind: LexemeKind::Identifier(_), ..}) => {
-                // todo: add checks for next lexeme
-                
+                // todo: add expects for next lexeme
+
+                self.expect_next(&[
+                    LexemeKind::Equals,
+                    LexemeKind::LeftParen
+                ])?;
+
                 match &self.next_lexeme {
                     Some(Lexeme{kind: LexemeKind::Equals, ..}) => self.parse_statement_assign(),
                     Some(Lexeme{kind: LexemeKind::LeftParen, ..}) => self.parse_statement_procedure_call(),
-                    _ => todo!()
+                    _ => unreachable!()
                 }
-                
             },
 
             Some(Lexeme{kind: LexemeKind::Return, ..}) => {
@@ -260,14 +394,20 @@ impl Parser {
         }
     }
 
-    fn parse_statement_procedure_call(&mut self) -> Result<Statement, Error> {
+    fn parse_statement_procedure_call(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> {
         // procedure call grammar
         // IDENTIFIER '(' [ EXPRESSION { ',' EXPRESSION } ] ')' ';'
 
-        println!("procedure_call");
-        
+        // println!("procedure_call");
+
+        let line_start = self.current_line;
         let identifier = match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => {
+                Symbol{
+                    name: identifier.to_owned(),
+                    line: *line
+                }
+            },
             _ => unreachable!()
         };
 
@@ -279,7 +419,7 @@ impl Parser {
             self.expect(&[LexemeKind::RightParen]) // explicitly putting this here
         )?;
         
-        let mut args: Vec<Expression> = Vec::new();
+        let mut args: Vec<ASTNode<Expression>> = Vec::new();
         match &self.current_lexeme {
             // no args
             Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
@@ -311,15 +451,19 @@ impl Parser {
         self.advance();
         self.expect(&[LexemeKind::Semicolon])?;
         
-        Ok(Statement::ProcedureCall {
-            identifier,
-            args
+        Ok(ASTNode {
+            kind: Statement::ProcedureCall {
+                identifier,
+                args  
+            },
+            lines: (line_start..=self.current_line).collect()
         })
     }
-    fn parse_statement_if(&mut self) -> Result<Statement, Error> {
+    fn parse_statement_if(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> {
         // if statement grammar
         // 'if' EXPRESSION STATEMENT [ 'else' STATEMENT ]
-
+        let line_start = self.current_line;
+        
         self.advance();
         let condition = self.parse_expression()?;
 
@@ -336,19 +480,24 @@ impl Parser {
             _ => None
         };
 
-        Ok(Statement::If {
-            condition,
-            on_true,
-            on_false
+        Ok(ASTNode{
+            kind: Statement::If {
+                condition,
+                on_true,
+                on_false
+            },
+            lines: (line_start..=self.current_line).collect()
         })
         
         // todo!()
     }
     
-    fn parse_statement_return(&mut self) -> Result<Statement, Error> {
+    fn parse_statement_return(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> {
         // return grammar
         // 'return' [ EXPRESSION ] ';'
-                
+
+        let line_start = self.current_line;
+        
         self.advance();
         let expression = self.parse_expression().ok();
 
@@ -358,14 +507,23 @@ impl Parser {
                 
         self.expect(&[LexemeKind::Semicolon])?;
                 
-        Ok(Statement::Return(expression))        
+        Ok(ASTNode {
+            kind: Statement::Return(expression),
+            lines: (line_start..=self.current_line).collect()
+        })        
     }
     
-    fn parse_statement_assign(&mut self) -> Result<Statement, Error> {
+    fn parse_statement_assign(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> {
         // assignment grammar
         // IDENTIFIER '=' EXPRESSION ';'
+
+        let line_start = self.current_line;
+
         let identifier = match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => Symbol {
+                name: identifier.to_owned(),
+                line: *line
+        },
             _ => unreachable!()
         };
     
@@ -380,14 +538,19 @@ impl Parser {
         self.advance();
         self.expect(&[LexemeKind::Semicolon])?;
     
-        Ok(Statement::Assign {
-            identifier,
-            value
+        Ok(ASTNode {
+            kind: Statement::Assign {
+                identifier,
+                value
+            },
+            lines: (line_start..=self.current_line).collect()
         })
     }
     
-    fn parse_statement_compound(&mut self) -> Result<Statement, Error> { 
-        let mut statements: Vec<Statement> = Vec::new();
+    fn parse_statement_compound(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> { 
+        let line_start = self.current_line;
+        
+        let mut statements: Vec<ASTNode<Statement>> = Vec::new();
 
         loop {
             self.advance();
@@ -401,25 +564,33 @@ impl Parser {
             }
         }
 
-        Ok(Statement::Compound(statements))
+        Ok(ASTNode {
+            kind: Statement::Compound(statements),
+            lines: (line_start..=self.current_line).collect()
+        })
     }
 
-    fn parse_statement_declare(&mut self) -> Result<Statement, Error> {
-        println!("parse_const_let");
+    fn parse_statement_declare(&mut self) -> Result<ASTNode<Statement>, Error<ParserError>> {
+        // println!("parse_const_let");
 
         // constant declaration grammar
         // 'const' IDENTIFIER [ ':' TYPE ] '=' EXPRESSION ';'
     
         // variable declaration grammar
         // 'let' IDENTIFIER ( ':' TYPE ) | ( '=' EXPRESSION ) ';'
-
+        
+        let line_start = self.current_line;
+        
         let is_const = self.current_lexeme.as_ref().unwrap().kind == LexemeKind::Const;
     
         self.advance();
         self.expect(&[LexemeKind::Identifier(String::new())])?;
-
+        
         let identifier = match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => Symbol {
+                name: identifier.to_owned(),
+                line: *line
+            },
             _ => unreachable!()
         };
     
@@ -474,23 +645,30 @@ impl Parser {
             _ => unreachable!()
     
         };
-    
-        if is_const {
-            Ok(Statement::DeclareConstant {
+
+        let statement_kind = if is_const {
+            Statement::DeclareConstant {
                 identifier,
                 data_type,
                 value: value.unwrap()
-            })
+            }
         } else {
-            Ok(Statement::DeclareVariable {
+            Statement::DeclareVariable {
                 identifier,
                 data_type,
                 value
-            })
-        }    
+            }
+        };
+
+        Ok(ASTNode {
+            kind: statement_kind,
+            lines: (line_start..=self.current_line).collect()
+        })
     }
 
-    fn parse_expression_function_definition(&mut self) -> Result<Expression, Error> {
+    fn parse_expression_function_definition(&mut self) -> Result<ASTNode<Expression>, Error<ParserError>> {
+        let line_start = self.current_line;
+        
         let is_proc = if let Some(Lexeme{kind: LexemeKind::Proc, ..}) = self.current_lexeme {
             true
         } else {
@@ -559,69 +737,106 @@ impl Parser {
             None
         };
 
-        let body = Box::new(self.parse_expression()?);
+        let body = Box::new(self.parse_statement()?);
 
-        if is_proc {
-            Ok(Expression::ProcedureDefinition {
+        let expression = if is_proc {
+            Expression::ProcedureDefinition {
                 args,
                 body
-            })
+            }
         } else {
-            Ok(Expression::FunctionDefinition {
+            Expression::FunctionDefinition {
                 args,
                 return_type: return_type.unwrap(),
                 body
-            })                    
-        }
-    }
-
-    fn parse_expression_compound(&mut self) -> Result<Expression, Error> {
-        // todo (maybe) allow implicit returns?
-
-        println!("here");
-                
-        let mut statements: Vec<Statement> = Vec::new();
-
-        loop {
-            self.advance();
-            match &self.current_lexeme {
-                Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => {
-                    break;
-                },
-                
-                Some(_) => statements.push(self.parse_statement()?),
-                None => unreachable!(),
             }
-        }
+        };
 
-        Ok(Expression::Compound{statements})
+        Ok(ASTNode {
+            kind: expression,
+            lines: (line_start..=self.current_line).collect()
+        })
     }
 
-    fn parse_expression_math(&mut self) -> Result<Expression, Error> {
-        let operand_1 = match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::StringLiteral(_) | LexemeKind::NumberLiteral(_), ..}) => {
+    // fn parse_expression_compound(&mut self) -> Result<ASTNode<Expression>, Error<ParserError>> {
+    //     // todo (maybe) allow implicit returns?
+
+    //     let line_start = self.current_line;
         
-                match &self.current_lexeme {
-                    Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
-                        if let Some(Lexeme{kind: LexemeKind::LeftParen, ..}) = self.next_lexeme {
-                            self.parse_value_function_call()?
-                        } else {   
-                            Expression::Identifier(identifier.to_owned())
-                        }
-                    },
-                    Some(Lexeme{kind: LexemeKind::StringLiteral(string), ..}) => Expression::StringLiteral(string.to_owned()),
-                    Some(Lexeme{kind: LexemeKind::NumberLiteral(number), ..}) => {
-                        if number.contains(".") {
-                            Expression::FloatLiteral(number.parse::<f32>().unwrap())
-                        } else {
-                            Expression::IntegerLiteral(number.parse::<i32>().unwrap())
-                        }
-                    },
-            
-                    _ => unreachable!()
+    //     let mut statements: Vec<ASTNode<Statement>> = Vec::new();
+
+    //     loop {
+    //         self.advance();
+    //         match &self.current_lexeme {
+    //             Some(Lexeme{kind: LexemeKind::RightBrace, ..}) => {
+    //                 break;
+    //             },
+                
+    //             Some(_) => statements.push(self.parse_statement()?),
+    //             None => unreachable!(),
+    //         }
+    //     }
+
+    //     Ok(ASTNode {
+    //         kind: Expression::Compound{
+    //             statements
+    //         },
+    //         lines: (line_start..=self.current_line).collect()
+    //     })
+    // }
+
+    fn parse_expression_math(&mut self) -> Result<ASTNode<Expression>, Error<ParserError>> {
+        let line_start = self.current_line;
+        let operand_1 = match &self.current_lexeme {
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => {
+                if let Some(Lexeme{kind: LexemeKind::LeftParen, ..}) = self.next_lexeme {
+                    self.parse_value_function_call()?
+                } else {   
+                    ASTNode {
+                        kind: Expression::Identifier(Symbol {
+                            name: identifier.to_owned(),
+                            line: *line
+                        }),
+                        lines: (line_start..=self.current_line).collect()
+                    }
+                }
+            },
+                    
+            Some(Lexeme{kind: LexemeKind::StringLiteral(string), ..}) => {
+                ASTNode {
+                    kind: Expression::StringLiteral(string.to_owned()),
+                    lines: (line_start..=self.current_line).collect()
+                }
+            },
+                    
+            Some(Lexeme{kind: LexemeKind::NumberLiteral(number), ..}) => {
+                if number.contains(".") {
+                    ASTNode {
+                        kind: Expression::FloatLiteral(number.parse::<f32>().unwrap()),
+                        lines: (line_start..=self.current_line).collect()
+                    }
+                } else {
+                    ASTNode {
+                        kind: Expression::IntegerLiteral(number.parse::<i32>().unwrap()),
+                        lines: (line_start..=self.current_line).collect()
+                    }
                 }
             },
 
+            Some(Lexeme{kind: LexemeKind::True, ..}) => {
+                ASTNode {
+                    kind: Expression::True,
+                    lines: (line_start..=self.current_line).collect()
+                }
+            }
+            
+            Some(Lexeme{kind: LexemeKind::False, ..}) => {
+                ASTNode {
+                    kind: Expression::False,
+                    lines: (line_start..=self.current_line).collect()
+                }
+            }
+            
             Some(Lexeme{kind: LexemeKind::LeftParen, .. }) => {
                 self.advance();
                 let expression = self.parse_expression()?;
@@ -635,30 +850,37 @@ impl Parser {
             _ => unreachable!()
         };
 
+        // determining operand_2 (can be None)
         if let Ok(operation) = BinaryOperation::from_lexeme(self.next_lexeme.as_ref().unwrap()) {
             self.advance(); // skip opereation
 
             self.advance();
             let operand_2 = self.parse_expression()?;
-        
-            Ok(Expression::Binary {
-                operation,
-                operand_1: Box::new(operand_1),
-                operand_2: Box::new(operand_2),
+            
+            Ok(ASTNode {
+                kind: Expression::Binary {
+                    operation,
+                    operand_1: Box::new(operand_1),
+                    operand_2: Box::new(operand_2),
+                },
+                lines: (line_start..=self.current_line).collect()
             })
         } else {
             Ok(operand_1)
         }    
     }
 
-    fn parse_value_function_call(&mut self) -> Result<Expression, Error> {
+    fn parse_value_function_call(&mut self) -> Result<ASTNode<Expression>, Error<ParserError>> {
         // function call grammar
         // IDENTIFIER '(' [ EXPRESSION { ',' EXPRESSION } ] ')' ';'
 
-        println!("function_call");
+        let line_start = self.current_line;
         
         let identifier = match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => Symbol {
+                name: identifier.to_owned(),
+                line: *line
+        },
             _ => unreachable!()
         };
 
@@ -670,7 +892,7 @@ impl Parser {
             self.expect(&[LexemeKind::RightParen]) // explicitly putting this here
         )?;
         
-        let mut args: Vec<Expression> = Vec::new();
+        let mut args: Vec<ASTNode<Expression>> = Vec::new();
         match &self.current_lexeme {
             // no args
             Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
@@ -699,50 +921,59 @@ impl Parser {
             _ => unreachable!()
         }
         
-        Ok(Expression::FunctionCall {
-            identifier,
-            args
+        Ok(ASTNode {
+            kind: Expression::FunctionCall {
+                identifier,
+                args
+            },
+            lines: (line_start..=self.current_line).collect()
         })
     }
     
-    fn parse_expression(&mut self) -> Result<Expression, Error> {        
+    fn parse_expression(&mut self) -> Result<ASTNode<Expression>, Error<ParserError>> {        
         self.expect(&Self::EXPRESSION_START_LEXEMES)?;
 
         match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(_) | LexemeKind::NumberLiteral(_) | LexemeKind::StringLiteral(_) | LexemeKind::LeftParen, ..}) => {
+            Some(Lexeme{kind: LexemeKind::Identifier(_) |
+                 LexemeKind::NumberLiteral(_) |
+                 LexemeKind::StringLiteral(_) |
+                 LexemeKind::True | 
+                 LexemeKind::False |
+                 LexemeKind::LeftParen, ..}) => {
                 self.parse_expression_math()
             },
-            
+
             Some(Lexeme{kind: LexemeKind::Func | LexemeKind::Proc, ..}) => {
                 self.parse_expression_function_definition()
             },
 
-            Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
-                self.parse_expression_compound()
-            },
+            // Some(Lexeme{kind: LexemeKind::LeftBrace, ..}) => {
+            //     self.parse_expression_compound()
+            // },
             
             _ => unreachable!()
         }
     }
     
-    fn parse_type(&mut self) -> Result<Type, Error> {
+    fn parse_type(&mut self) -> Result<Type, Error<ParserError>> {
         //println!("parse type\n{:#?}\n", lexemes_iter);
-        self.expect(&[
-            LexemeKind::Identifier(String::new()),
-            LexemeKind::Proc,
-            LexemeKind::Func,
-        ])?;
+        
+        self.expect(&Self::TYPE_LEXEMES)?;
 
         match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => {
-                match identifier.as_str() {
-                    "int" => Ok(Type::Int),
-                    "float" => Ok(Type::Float),
-                    "string" => Ok(Type::String),
-                    _ => Ok(Type::UserDefined(identifier.to_string())),
-                }            
+            Some(Lexeme{kind: LexemeKind::Int, ..}) => Ok(Type::Integer),
+            Some(Lexeme{kind: LexemeKind::Float, ..}) => Ok(Type::Float),
+            Some(Lexeme{kind: LexemeKind::String, ..}) => Ok(Type::String),
+            Some(Lexeme{kind: LexemeKind::Bool, ..}) => Ok(Type::Boolean),
+            
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => {
+                Ok(Type::UserDefined(Symbol{
+                    name: identifier.to_string(),
+                    line: *line
+                }))
             },
 
+                        
             Some(lexeme @ Lexeme{kind: LexemeKind::Proc | LexemeKind::Func, ..}) => {
                 let is_proc = lexeme.kind == LexemeKind::Proc;
 
@@ -759,12 +990,8 @@ impl Parser {
                 let mut param_types: Vec<Type> = Vec::new();            
             
                 self.advance();
-                self.expect(&[
-                    LexemeKind::Identifier(String::new()),
-                    LexemeKind::Proc,
-                    LexemeKind::Func,
-                    LexemeKind::RightParen
-                ])?;
+                self.expect(&Self::TYPE_LEXEMES)
+                    .or(self.expect(&[LexemeKind::RightParen]))?;
 
                 match &self.current_lexeme {
                     Some(Lexeme{kind: LexemeKind::RightParen, ..}) => {},
@@ -818,11 +1045,14 @@ impl Parser {
         }
     }
 
-    fn parse_identifier_and_type(&mut self) -> Result<IdentifierAndType, Error> {
+    fn parse_identifier_and_type(&mut self) -> Result<IdentifierAndType, Error<ParserError>> {
         self.expect(&[LexemeKind::Identifier(String::new())])?;
 
         let identifier = match &self.current_lexeme {
-            Some(Lexeme{kind: LexemeKind::Identifier(identifier), ..}) => identifier.to_owned(),
+            Some(Lexeme{kind: LexemeKind::Identifier(identifier), line}) => Symbol{
+                name: identifier.to_owned(),
+                line: *line
+            },
             _ => unreachable!()
         };
 
